@@ -1,0 +1,63 @@
+# A cada envio (push) para a branch main: testa, compila o executável do
+# Windows e publica uma nova Release com o pacote .zip.
+name: Compilar e publicar
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - name: Baixar código
+        uses: actions/checkout@v4
+
+      - name: Instalar Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache de compilação
+        uses: Swatinem/rust-cache@v2
+
+      - name: Testes
+        run: cargo test
+
+      - name: Compilar (release)
+        env:
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: cargo build --release
+
+      - name: Empacotar
+        shell: pwsh
+        run: |
+          $v = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          $tag = "v$v-build.${{ github.run_number }}"
+          $nome = "CalculadoraContencoes_v$v-build.${{ github.run_number }}"
+          $pasta = "dist/$nome"
+          New-Item -ItemType Directory -Force "$pasta/exemplos" | Out-Null
+          Copy-Item target/release/calculadora_contencoes.exe "$pasta/CalculadoraContencoes.exe"
+          Copy-Item exemplos/* "$pasta/exemplos/"
+          Copy-Item LEIA-ME.txt "$pasta/"
+          Compress-Archive -Path $pasta -DestinationPath "dist/$nome.zip"
+          "TAG=$tag" >> $env:GITHUB_ENV
+          "VERSAO=$v" >> $env:GITHUB_ENV
+          "ZIP=dist/$nome.zip" >> $env:GITHUB_ENV
+
+      - name: Publicar release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          name: Calculadora de Contenções ${{ env.VERSAO }} (build ${{ github.run_number }})
+          target_commitish: ${{ github.sha }}
+          generate_release_notes: true
+          files: ${{ env.ZIP }}

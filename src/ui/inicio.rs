@@ -1,0 +1,103 @@
+//! Tela de abertura: apresentação, versão, autoria e direitos autorais.
+
+use super::tema;
+use super::widgets::{botao_primario, botao_secundario, cartao, pintar_logo};
+use crate::sobre;
+use eframe::egui::{self, RichText, Stroke};
+
+pub enum Acao {
+    Nenhuma,
+    Novo,
+    Abrir,
+    Continuar,
+}
+
+pub fn mostrar(ctx: &egui::Context, sessao_anterior: Option<&str>, atualizacao: Option<&crate::atualizacao::Estado>) -> Acao {
+    let mut acao = Acao::Nenhuma;
+
+    egui::TopBottomPanel::bottom("rodape_inicio")
+        .frame(egui::Frame::new().fill(tema::paleta(ctx.style().visuals.dark_mode).painel).inner_margin(egui::Margin::symmetric(24, 12)))
+        .show(ctx, |ui| {
+            let p = tema::de(ui);
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new("Desenvolvido por").color(p.fraco));
+                ui.label(RichText::new(sobre::CRIADOR).strong());
+                ui.label(RichText::new("·").color(p.fraco));
+                ui.hyperlink_to(sobre::SITE.trim_start_matches("https://"), sobre::SITE);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    egui::widgets::global_theme_preference_switch(ui);
+                    ui.label(RichText::new(sobre::copyright()).color(p.fraco));
+                });
+            });
+        });
+
+    egui::CentralPanel::default().show(ctx, |ui| {
+        let p = tema::de(ui);
+        // fundo decorativo: linhas de nível suaves
+        let r = ui.max_rect();
+        let pt = ui.painter();
+        for i in 0..14 {
+            let y = r.top() + r.height() * (0.15 + i as f32 * 0.065);
+            let cor = p.destaque.gamma_multiply(0.05);
+            let pts: Vec<egui::Pos2> = (0..=40)
+                .map(|k| {
+                    let x = r.left() + r.width() * k as f32 / 40.0;
+                    egui::pos2(x, y + 18.0 * ((k as f32 * 0.35 + i as f32).sin()))
+                })
+                .collect();
+            pt.add(egui::Shape::line(pts, Stroke::new(1.5_f32, cor)));
+        }
+
+        ui.vertical_centered(|ui| {
+            ui.add_space((ui.available_height() * 0.10).max(20.0));
+            let (lr, _) = ui.allocate_exact_size(egui::vec2(116.0, 116.0), egui::Sense::hover());
+            pintar_logo(ui.painter(), lr, &p);
+            ui.add_space(18.0);
+            ui.label(RichText::new(sobre::NOME).font(tema::fonte_forte(38.0)).color(p.texto));
+            ui.label(RichText::new(sobre::SUBTITULO).size(18.0).color(p.fraco));
+            ui.add_space(8.0);
+            ui.label(RichText::new(format!("Versão {}", sobre::versao_completa())).color(p.destaque).font(tema::fonte_forte(13.0)));
+            if let Some(e) = atualizacao {
+                ui.add_space(6.0);
+                crate::atualizacao::aviso(ui, e);
+            }
+            ui.add_space(30.0);
+
+            ui.allocate_ui_with_layout(egui::vec2(470.0, 50.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                if botao_primario(ui, "Iniciar novo projeto").clicked() {
+                    acao = Acao::Novo;
+                }
+                ui.add_space(14.0);
+                if botao_secundario(ui, "Carregar projeto existente").clicked() {
+                    acao = Acao::Abrir;
+                }
+            });
+            if let Some(nome) = sessao_anterior {
+                ui.add_space(10.0);
+                if ui.link(RichText::new(format!("↺  Continuar último projeto: {nome}")).size(14.0)).clicked() {
+                    acao = Acao::Continuar;
+                }
+            }
+
+            ui.add_space(36.0);
+            ui.allocate_ui_with_layout(egui::vec2(760.0, 120.0), egui::Layout::left_to_right(egui::Align::Min), |ui| {
+                ui.columns(3, |c| {
+                    let itens = [
+                        ("Sondagem SPT", "Importe ou digite o perfil; γ, c' e φ' por correlações ajustáveis."),
+                        ("6 tipos de contenção", "Gravidade, flexão, atirantada, estaca-prancha, estacas e solo grampeado."),
+                        ("Normas ABNT", "NBR 11682, 6122, 5629, 16920-2 e 6118:2023 com memorial de cálculo."),
+                    ];
+                    for (i, (t, d)) in itens.iter().enumerate() {
+                        cartao(&mut c[i], |ui| {
+                            ui.label(RichText::new(*t).font(tema::fonte_forte(15.0)).color(p.destaque));
+                            ui.label(RichText::new(*d).size(13.0).color(p.fraco));
+                        });
+                    }
+                });
+            });
+            ui.add_space(16.0);
+            ui.label(RichText::new(sobre::NORMAS.join("   ·   ")).small().color(p.fraco));
+        });
+    });
+    acao
+}

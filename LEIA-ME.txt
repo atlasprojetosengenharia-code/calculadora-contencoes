@@ -1,0 +1,37 @@
+﻿CALCULADORA DE CONTENÇÕES — versão 0.2.0 (TESTE)
+================================================
+
+COMO ABRIR
+  Dê dois cliques em "CalculadoraContencoes.exe". Não precisa instalar nada.
+  Requisitos: Windows 10 ou 11 (64 bits), placa de vídeo com OpenGL 2.0 ou superior.
+  Se o Windows SmartScreen avisar "aplicativo não reconhecido", clique em
+  "Mais informações" > "Executar assim mesmo" (o executável não é assinado digitalmente).
+
+ROTEIRO DE TESTE
+  1. Tela inicial > "Iniciar novo projeto".
+  2. Etapa 1 — Sondagem SPT:
+     - edite camadas na tabela ou clique "Importar CSV / TXT" e escolha
+       exemplos\sondagem_exemplo.csv;
+     - confira γ, c' e φ' calculados (botão Auto/Manual por camada).
+  3. Etapa 2 — Contenção e geometria:
+     - escolha o tipo (gravidade, flexão, atirantada, estaca-prancha, estacas, grampeado);
+     - informe H, inclinação do talude, sobrecarga e engastamento;
+     - muro de gravidade: dimensões A, B, C, D, E, F e material (γ fixo, NBR 6120:2019);
+     - configure a drenagem (barbacãs, filtro, dreno de pé, canaleta, DHP).
+  4. Etapa 3 — Resultados: verificações, avisos, memorial (copiar / exportar .txt).
+  5. "Normas e fatores": nível de segurança da NBR 11682 e demais coeficientes.
+  6. Salve o projeto (arquivo .ctc) e reabra por "Carregar projeto existente".
+
+FORMATO DO ARQUIVO DE SONDAGEM (CSV/TXT)
+  prof. inicial ; prof. final ; NSPT ; descrição
+  profundidade ; NSPT ; descrição        (ensaio metro a metro)
+  NA ; 3,50                              (nível d'água)
+
+LIMITAÇÕES DESTA VERSÃO
+  - Estabilidade global (Bishop/Spencer) ainda não implementada.
+  - Parâmetros por correlação com o SPT são estimativas; confirmar com ensaios.
+  - Ferramenta de apoio ao cálculo: o projeto é de responsabilidade do
+    engenheiro que emite a ART.
+
+Os dados da última sessão ficam salvos automaticamente pelo programa em
+%APPDATA%\Calculadora de Contenções\

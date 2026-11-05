@@ -1,0 +1,13 @@
+# Compilação
+/target
+/dist
+
+# Memoriais gerados em testes locais
+memorial_*.txt
+
+# Editores / SO
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+Desktop.ini
