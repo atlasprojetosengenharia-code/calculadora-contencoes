@@ -6,7 +6,7 @@
 #   - a release (somente o .zip) é publicada no repositório PÚBLICO
 #     definido em REPO_PUBLICO, usando o segredo RELEASES_TOKEN
 #     (token fine-grained com "Contents: read and write" só naquele repositório).
-#   - sem o segredo, a release é publicada aqui mesmo (privada).
+#   - sem o segredo, o .zip fica como artefato da execução (aba Actions).
 name: Compilar e publicar
 
 on:
@@ -18,7 +18,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release
@@ -78,12 +78,10 @@ jobs:
             Baixe o arquivo **.zip** abaixo, descompacte e execute `CalculadoraContencoes.exe` (Windows 10/11, 64 bits). Não requer instalação.
           files: ${{ env.ZIP }}
 
-      - name: Publicar release privada (sem token público configurado)
+      - name: Guardar executável como artefato (sem token público configurado)
         if: env.TEM_TOKEN_PUBLICO != 'true'
-        uses: softprops/action-gh-release@v2
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: ${{ env.TAG }}
-          name: Calculadora de Contenções ${{ env.VERSAO }} (build ${{ github.run_number }})
-          target_commitish: ${{ github.sha }}
-          generate_release_notes: true
-          files: ${{ env.ZIP }}
+          name: ${{ env.TAG }}
+          path: ${{ env.ZIP }}
+          retention-days: 30
