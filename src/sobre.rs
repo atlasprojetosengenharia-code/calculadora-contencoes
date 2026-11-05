@@ -6,7 +6,7 @@ pub const VERSAO: &str = env!("CARGO_PKG_VERSION");
 /// Número do build, injetado pelo GitHub Actions (variável BUILD_NUMBER).
 pub const BUILD: Option<&str> = option_env!("BUILD_NUMBER");
 /// Repositório "usuario/nome" usado para verificar atualizações.
-pub const REPOSITORIO: &str = "atlasprojetosengenharia-code/calculadora-contencoes";
+pub const REPOSITORIO: &str = "atlasprojetosengenharia-code/calculadora-contencoes-releases";
 
 pub fn versao_completa() -> String {
     match BUILD {

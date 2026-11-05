@@ -1,5 +1,12 @@
 # A cada envio (push) para a branch main: testa, compila o executável do
-# Windows e publica uma nova Release com o pacote .zip.
+# Windows e publica uma Release com o pacote .zip.
+#
+# Distribuição pública sem expor o código:
+#   - o código fica neste repositório PRIVADO;
+#   - a release (somente o .zip) é publicada no repositório PÚBLICO
+#     definido em REPO_PUBLICO, usando o segredo RELEASES_TOKEN
+#     (token fine-grained com "Contents: read and write" só naquele repositório).
+#   - sem o segredo, a release é publicada aqui mesmo (privada).
 name: Compilar e publicar
 
 on:
@@ -7,6 +14,7 @@ on:
     branches: [main]
     paths-ignore:
       - "**.md"
+      - "distribuicao/**"
   workflow_dispatch:
 
 permissions:
@@ -15,6 +23,10 @@ permissions:
 concurrency:
   group: release
   cancel-in-progress: false
+
+env:
+  REPO_PUBLICO: atlasprojetosengenharia-code/calculadora-contencoes-releases
+  TEM_TOKEN_PUBLICO: ${{ secrets.RELEASES_TOKEN != '' }}
 
 jobs:
   windows:
@@ -53,7 +65,21 @@ jobs:
           "VERSAO=$v" >> $env:GITHUB_ENV
           "ZIP=dist/$nome.zip" >> $env:GITHUB_ENV
 
-      - name: Publicar release
+      - name: Publicar release no repositório público
+        if: env.TEM_TOKEN_PUBLICO == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          repository: ${{ env.REPO_PUBLICO }}
+          token: ${{ secrets.RELEASES_TOKEN }}
+          tag_name: ${{ env.TAG }}
+          target_commitish: main
+          name: Calculadora de Contenções ${{ env.VERSAO }} (build ${{ github.run_number }})
+          body: |
+            Baixe o arquivo **.zip** abaixo, descompacte e execute `CalculadoraContencoes.exe` (Windows 10/11, 64 bits). Não requer instalação.
+          files: ${{ env.ZIP }}
+
+      - name: Publicar release privada (sem token público configurado)
+        if: env.TEM_TOKEN_PUBLICO != 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TAG }}

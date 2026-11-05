@@ -12,8 +12,9 @@ flexão, cortina atirantada, estaca-prancha, parede de estacas e solo grampeado.
 
 ## Download
 
-Cada envio para a branch `main` gera automaticamente uma nova versão em
-**[Releases](../../releases)**. Baixe o `.zip`, descompacte e execute
+Cada envio para a branch `main` gera automaticamente uma nova versão, publicada no
+repositório público **[calculadora-contencoes-releases](https://github.com/atlasprojetosengenharia-code/calculadora-contencoes-releases/releases)**
+(somente executáveis — o código permanece neste repositório privado). Baixe o `.zip`, descompacte e execute
 `CalculadoraContencoes.exe` — não requer instalação. O programa avisa quando
 houver versão mais nova.
 
