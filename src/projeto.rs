@@ -317,6 +317,16 @@ impl Projeto {
                 fmt(g), fmt(p), fmt(c)
             ));
         }
+        // NBR 11682 7.3.7.3 — monitoramento obrigatório
+        if matches!(
+            self.tipo,
+            TipoContencao::Atirantada | TipoContencao::Prancha | TipoContencao::Estacas | TipoContencao::Grampeado
+        ) {
+            r.aviso("Escavação: se a região de influência das deformações atingir obras existentes, o monitoramento com instrumentação geotécnica é obrigatório (NBR 11682 7.3.7.3 b).");
+        }
+        if self.altura_contida() > 30.0 {
+            r.aviso("Altura > 30 m: em área urbana, o monitoramento com instrumentação geotécnica é obrigatório (NBR 11682 7.3.7.3 c).");
+        }
         if s.tem_coesivo_padrao() {
             r.aviso("Camadas coesivas com c' e φ' padrão (condição drenada) — ajustar com base em ensaios (NBR 11682 Anexo D).");
         }

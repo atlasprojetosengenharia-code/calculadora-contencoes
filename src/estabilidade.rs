@@ -166,7 +166,7 @@ pub fn analisar(
     // Tombamento
     let fs_t = if m_inst > 0.0 { m_est / m_inst } else { f64::INFINITY };
     res.linha(format!("Momento estabilizante = {} kN·m/m ; instabilizante = {} kN·m/m", fmt(m_est), fmt(m_inst)));
-    res.verif(Verificacao::min(format!("FS tombamento ({caso})"), fs_t, lim.tombamento, ""));
+    res.verif(Verificacao::min(format!("FS tombamento — NBR 11682 Tab. 4 ({caso})"), fs_t, lim.tombamento, ""));
 
     // Deslizamento
     let tan_db = (rad(fund.phi) * fund.frac_delta_base).tan();
@@ -177,7 +177,7 @@ pub fn analisar(
         "N = {} kN/m ; tan δb = {} ; adesão = {} kPa ; passivo = {} kN/m ; R = {} kN/m ; T = {} kN/m",
         fmt(n), fmt(tan_db), fmt(ca), fmt(r_pas), fmt(r), fmt(t)
     ));
-    res.verif(Verificacao::min(format!("FS deslizamento ({caso})"), fs_d, lim.deslizamento, ""));
+    res.verif(Verificacao::min(format!("FS deslizamento na base — NBR 11682 Tab. 4 ({caso})"), fs_d, lim.deslizamento, ""));
 
     // Excentricidade
     let x_r = if n > 0.0 { m_liq / n } else { 0.0 };
@@ -211,6 +211,6 @@ pub fn analisar(
         "B' = {} m ; inclinação da carga = {}° ; Nc = {} ; Nq = {} ; Nγ = {} ; qult = {} kPa ; q' = N/B' = {} kPa",
         fmt(b_ef), fmt(alfa.to_degrees()), fmt(nc), fmt(nq), fmt(ng), fmt(qult), fmt(q_ef)
     ));
-    res.verif(Verificacao::min(format!("FS capacidade de carga ({caso})"), fs_c, lim.capacidade, ""));
+    res.verif(Verificacao::min(format!("FS capacidade de carga — NBR 11682 Tab. 4 / NBR 6122 ({caso})"), fs_c, lim.capacidade, ""));
     dist
 }

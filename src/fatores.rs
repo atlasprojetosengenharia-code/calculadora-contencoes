@@ -49,7 +49,9 @@ pub struct Fatores {
     /// Nota 1 da Tabela 3: grande variabilidade dos ensaios → +10 %.
     pub majorar_variabilidade: bool,
 
-    // --- Muros (tombamento, deslizamento, capacidade de carga) ---
+    // --- NBR 11682:2009 Tabela 4 — muros de gravidade e de flexão ---
+    // Tombamento 2,0 ; deslizamento na base 1,5 ; capacidade de carga 3,0
+    // (ou critérios da NBR 6122, Nota da Tab. 4)
     pub fs_deslizamento: f64,
     pub fs_tombamento: f64,
     /// NBR 6122 Tabela 1 — método analítico: FSg = 3,0.
@@ -183,6 +185,9 @@ mod testes {
         assert_eq!(fs_tabela3(Nivel::Alto, Nivel::Baixo), 1.4); // vidas alto, danos baixo
         assert_eq!(fs_tabela3(Nivel::Medio, Nivel::Medio), 1.4);
         assert_eq!(fs_tabela3(Nivel::Baixo, Nivel::Baixo), 1.2);
+        // NBR 11682:2009 Tabela 4 — muros de contenção
+        let d = Fatores::default();
+        assert_eq!((d.fs_tombamento, d.fs_deslizamento, d.fs_capacidade_carga), (2.0, 1.5, 3.0));
         let mut f = Fatores::default();
         f.majorar_variabilidade = true;
         assert!((f.fs_global() - 1.65).abs() < 1e-9);

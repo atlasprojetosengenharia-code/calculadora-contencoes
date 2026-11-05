@@ -49,7 +49,7 @@ pub fn mostrar(ui: &mut egui::Ui, f: &mut Fatores) {
             });
             ui.add_space(10.0);
             cartao(ui, |ui| {
-                titulo(ui, "Muros — estabilidade externa");
+                titulo(ui, "Muros — NBR 11682 Tabela 4");
                 grade(ui, "mur", |ui| {
                     num(ui, "FS deslizamento", &mut f.fs_deslizamento, "", 1.0..=5.0, 0.01);
                     num(ui, "FS tombamento", &mut f.fs_tombamento, "", 1.0..=5.0, 0.01);
@@ -58,7 +58,7 @@ pub fn mostrar(ui: &mut egui::Ui, f: &mut Fatores) {
                     num(ui, "Área comprimida mín. / B", &mut f.area_comprimida_min, "", 0.3..=1.0, 0.01);
                     num(ui, "Sobrecarga mínima (7.3.3)", &mut f.sobrecarga_minima, "kPa", 0.0..=50.0, 0.5);
                 });
-                nota(ui, "Tombamento 2,0 e deslizamento 1,5: prática usual (a página 19 da NBR 11682 fornecida está ausente).");
+                nota(ui, "NBR 11682:2009 Tabela 4: tombamento 2,0 ; deslizamento na base 1,5 ; capacidade de carga 3,0 (ou critérios da NBR 6122).");
                 ui.add_space(4.0);
                 ui.label(RichText::new("Caso sísmico").strong());
                 grade(ui, "sis", |ui| {
