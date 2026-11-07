@@ -117,6 +117,24 @@ impl MetodoPhi {
     }
 }
 
+/// Modo de entrada dos parâmetros do solo.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub enum ModoSolo {
+    /// Sondagem completa, camada a camada.
+    Completo,
+    /// Um único NSPT e tipo de solo predominante (solo homogêneo).
+    Simplificado,
+}
+
+impl ModoSolo {
+    pub fn nome(&self) -> &'static str {
+        match self {
+            ModoSolo::Completo => "SPT completo (camadas)",
+            ModoSolo::Simplificado => "Entrada simplificada na base",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum CondicaoCoesivos {
     /// Longo prazo: c' e φ' padrão definidos pelo usuário.
@@ -158,6 +176,12 @@ pub struct Sondagem {
     pub coesivos: CondicaoCoesivos,
     pub c_drenado: f64,
     pub phi_drenado: f64,
+    /// Modo de entrada (projetos antigos abrem como `Completo`).
+    pub modo: ModoSolo,
+    /// Entrada simplificada: NSPT representativo da base.
+    pub simples_nspt: f64,
+    /// Entrada simplificada: tipo de solo predominante na fundação.
+    pub simples_tipo: TipoSolo,
 }
 
 impl Default for Sondagem {
@@ -176,6 +200,9 @@ impl Default for Sondagem {
             coesivos: CondicaoCoesivos::Drenada,
             c_drenado: 5.0,
             phi_drenado: 25.0,
+            modo: ModoSolo::Completo,
+            simples_nspt: 10.0,
+            simples_tipo: TipoSolo::AreiaArgilosa,
         };
         s.recalcular();
         s
@@ -236,33 +263,60 @@ impl Sondagem {
         if i == 0 { 0.0 } else { self.camadas[i - 1].ate }
     }
 
+    /// Parâmetros estimados por correlação: (γ, γsat, c', φ').
+    pub fn parametros(&self, tipo: TipoSolo, nspt: f64) -> (f64, f64, f64, f64) {
+        let n = nspt.max(0.0);
+        let (g, gs) = gamma_godoy(tipo, n);
+        let (c, phi) = if tipo.granular() {
+            let phi = match self.metodo_phi {
+                MetodoPhi::Teixeira1996 => (20.0 * n).sqrt() + 15.0,
+                MetodoPhi::Godoy1983 => 28.0 + 0.4 * n,
+            };
+            (0.0, phi.min(45.0))
+        } else {
+            match self.coesivos {
+                CondicaoCoesivos::NaoDrenada => (10.0 * n, 0.0),
+                CondicaoCoesivos::Drenada => (self.c_drenado, self.phi_drenado),
+            }
+        };
+        (g, gs, c, phi)
+    }
+
     /// Recalcula os parâmetros das camadas não marcadas como manuais.
     pub fn recalcular(&mut self) {
-        let (met, coe, cd, pd) = (self.metodo_phi, self.coesivos, self.c_drenado, self.phi_drenado);
-        for c in self.camadas.iter_mut().filter(|c| !c.manual) {
-            let n = c.nspt.max(0.0);
-            let (g, gs) = gamma_godoy(c.tipo, n);
-            c.gamma = g;
-            c.gamma_sat = gs;
-            if c.tipo.granular() {
-                c.c = 0.0;
-                c.phi = match met {
-                    MetodoPhi::Teixeira1996 => (20.0 * n).sqrt() + 15.0,
-                    MetodoPhi::Godoy1983 => 28.0 + 0.4 * n,
-                }
-                .min(45.0);
-            } else {
-                match coe {
-                    CondicaoCoesivos::NaoDrenada => {
-                        c.c = 10.0 * n;
-                        c.phi = 0.0;
-                    }
-                    CondicaoCoesivos::Drenada => {
-                        c.c = cd;
-                        c.phi = pd;
-                    }
-                }
+        let novos: Vec<Option<(f64, f64, f64, f64)>> =
+            self.camadas.iter().map(|c| (!c.manual).then(|| self.parametros(c.tipo, c.nspt))).collect();
+        for (c, p) in self.camadas.iter_mut().zip(novos) {
+            if let Some((g, gs, coes, phi)) = p {
+                c.gamma = g;
+                c.gamma_sat = gs;
+                c.c = coes;
+                c.phi = phi;
             }
+        }
+    }
+
+    /// Camada única da entrada simplificada (solo homogêneo até 100 m).
+    pub fn camada_simplificada(&self) -> CamadaSpt {
+        let (g, gs, c, phi) = self.parametros(self.simples_tipo, self.simples_nspt);
+        CamadaSpt {
+            ate: 100.0,
+            nspt: self.simples_nspt.max(0.0),
+            descricao: format!("{} (entrada simplificada)", self.simples_tipo.nome()),
+            tipo: self.simples_tipo,
+            manual: false,
+            gamma: g,
+            gamma_sat: gs,
+            c,
+            phi,
+        }
+    }
+
+    /// Camadas usadas no cálculo, conforme o modo de entrada.
+    pub fn camadas_calc(&self) -> Vec<CamadaSpt> {
+        match self.modo {
+            ModoSolo::Completo => self.camadas.clone(),
+            ModoSolo::Simplificado => vec![self.camada_simplificada()],
         }
     }
 
@@ -304,15 +358,18 @@ impl Sondagem {
         if self.usar_na { Some(self.prof_na) } else { None }
     }
 
-    pub fn camada_em(&self, z: f64) -> Option<&CamadaSpt> {
-        self.camadas.iter().find(|c| z < c.ate).or(self.camadas.last())
+    pub fn camada_em(&self, z: f64) -> Option<CamadaSpt> {
+        let cs = self.camadas_calc();
+        cs.iter().find(|c| z < c.ate).or(cs.last()).cloned()
     }
 
     /// Converte em perfil de cálculo (z = 0 no topo da sondagem).
     pub fn perfil(&self, na: Option<f64>) -> Perfil {
         let mut camadas = Vec::new();
-        for (i, c) in self.camadas.iter().enumerate() {
-            let esp = (c.ate - self.de(i)).max(0.01);
+        let cs = self.camadas_calc();
+        for (i, c) in cs.iter().enumerate() {
+            let de = if i == 0 { 0.0 } else { cs[i - 1].ate };
+            let esp = (c.ate - de).max(0.01);
             camadas.push(Camada {
                 nome: if c.descricao.is_empty() { c.tipo.nome().into() } else { c.descricao.clone() },
                 espessura: esp,
@@ -344,7 +401,7 @@ impl Sondagem {
     }
 
     pub fn tem_coesivo_padrao(&self) -> bool {
-        self.coesivos == CondicaoCoesivos::Drenada && self.camadas.iter().any(|c| !c.tipo.granular() && !c.manual)
+        self.coesivos == CondicaoCoesivos::Drenada && self.camadas_calc().iter().any(|c| !c.tipo.granular() && !c.manual)
     }
 }
 
@@ -430,6 +487,31 @@ mod testes {
         assert_eq!(s.camadas[1].c, 80.0);
         assert_eq!(s.camadas[1].phi, 0.0);
         assert_eq!(s.camadas[1].gamma, 17.0);
+    }
+
+    #[test]
+    fn entrada_simplificada() {
+        let mut s = Sondagem::default();
+        s.modo = ModoSolo::Simplificado;
+        s.simples_tipo = TipoSolo::Areia;
+        s.simples_nspt = 20.0;
+        let cs = s.camadas_calc();
+        assert_eq!(cs.len(), 1);
+        assert!((cs[0].phi - 35.0).abs() < 1e-9 && cs[0].c == 0.0 && cs[0].gamma == 20.0);
+        // perfil homogêneo e fundação na mesma camada, qualquer profundidade
+        let p = s.perfil(None);
+        assert_eq!(p.camadas.len(), 1);
+        assert!((s.camada_em(37.0).unwrap().phi - 35.0).abs() < 1e-9);
+        // camadas da sondagem completa permanecem intactas
+        assert_eq!(s.camadas.len(), 4);
+        // argila não drenada: Su = 10·N
+        s.simples_tipo = TipoSolo::Argila;
+        s.simples_nspt = 8.0;
+        s.coesivos = CondicaoCoesivos::NaoDrenada;
+        let c = s.camada_simplificada();
+        assert_eq!((c.c, c.phi, c.gamma), (80.0, 0.0, 17.0));
+        s.modo = ModoSolo::Completo;
+        assert_eq!(s.camadas_calc().len(), 4);
     }
 
     #[test]

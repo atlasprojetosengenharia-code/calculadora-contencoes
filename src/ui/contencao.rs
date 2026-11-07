@@ -140,7 +140,16 @@ fn entradas(ui: &mut egui::Ui, proj: &mut Projeto, res: &Resultado) {
             let (g, ph, c) = sondagem.medias(geometria.h);
             nota(ui, &format!("Solo (médias da sondagem até H): γ = {} ; φ' = {}° ; c' = {} kPa", fmt(g), fmt(ph), fmt(c)));
         } else {
-            nota(ui, &format!("Solo contido: sondagem {} ({} camadas).", sondagem.identificacao, sondagem.camadas.len()));
+            nota(ui, &match sondagem.modo {
+                crate::spt::ModoSolo::Completo => {
+                    format!("Solo contido: sondagem {} ({} camadas).", sondagem.identificacao, sondagem.camadas.len())
+                }
+                crate::spt::ModoSolo::Simplificado => format!(
+                    "Solo: entrada simplificada — {} com NSPT = {} (homogêneo).",
+                    sondagem.simples_tipo.nome(),
+                    fmt(sondagem.simples_nspt)
+                ),
+            });
         }
     });
     ui.add_space(10.0);

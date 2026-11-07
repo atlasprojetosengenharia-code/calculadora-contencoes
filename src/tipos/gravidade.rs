@@ -201,7 +201,7 @@ pub fn formula_empuxo(
     theta: f64,
     hv: f64,
     est: &EmpuxoNoPlano,
-) {
+) -> f64 {
     let cam = aterro.camada_em(0.0);
     let (eq, sub) = match emp.teoria {
         Teoria::Rankine if emp.beta.abs() < 1e-9 => (
@@ -239,6 +239,45 @@ pub fn formula_empuxo(
             fmt(est.pa), fmt(est.pa * est.incl.cos()), fmt(est.pa * est.incl.sin())
         ),
     );
+    // Parcela da sobrecarga no empuxo (Ka·q ao longo da altura)
+    let pq = integrar(|z| emp.coef_ativo(aterro.camada_em(z).phi, theta) * cargas.q_uniforme, 0.0, hv, 400).0
+        * est.incl.cos();
+    let ph = est.pa * est.incl.cos();
+    if ph > 1e-9 && cargas.q_uniforme > 0.0 {
+        r.formula(
+            "Composição do empuxo horizontal",
+            "Ph,q = ∫₀ᴴ Ka·q dz ·cos i ;  Ph,solo = Ph − Ph,q",
+            format!("Ph,q = Ka·{}·{} (≈)", fmt(cargas.q_uniforme), fmt(hv)),
+            format!(
+                "Ph,q = {} kN/m ({} %) ;  Ph,solo = {} kN/m ({} %)",
+                fmt(pq.min(ph)),
+                format!("{:.0}", 100.0 * pq.min(ph) / ph),
+                fmt((ph - pq).max(0.0)),
+                format!("{:.0}", 100.0 * (ph - pq).max(0.0) / ph)
+            ),
+        );
+    }
+    pq
+}
+
+/// Aviso didático quando o deslizamento estático não atende: mostra o peso
+/// da sobrecarga no empuxo e as alternativas usuais de projeto.
+pub fn diagnostico_deslizamento(r: &mut Resultado, ph_q: f64, ph_total: f64, passivo: bool) {
+    let falhou = r
+        .verificacoes
+        .iter()
+        .any(|v| v.nome.starts_with("FS deslizamento") && v.nome.contains("(estático)") && !v.ok());
+    if !falhou {
+        return;
+    }
+    let pct = if ph_total > 1e-9 { 100.0 * ph_q.min(ph_total) / ph_total } else { 0.0 };
+    r.aviso(format!(
+        "Deslizamento não atende: a sobrecarga responde por {} % do empuxo horizontal. Alternativas: {}Coulomb com δ no tardoz, \
+         revisar δb/φ' e adesão do contato base-solo, parâmetros do solo de fundação por ensaio (ou entrada simplificada \
+         com o NSPT real), base inclinada ou dente de ancoragem, ou ampliar a base.",
+        format!("{pct:.0}"),
+        if passivo { "" } else { "considerar o passivo frontal (NBR 6122 7.6.3, reduzido), " }
+    ));
 }
 
 /// Subpressão triangular sob a base (NA no aterro, sem água à frente).
@@ -397,10 +436,12 @@ impl MuroGravidade {
             "θ do plano = {}° ; K ativo (camada superior) = {} ; Pa = {} kN/m ; inclinação = {}°",
             fmt(theta.to_degrees()), fmt(est.k), fmt(est.pa), fmt(est.incl.to_degrees())
         ));
-        formula_empuxo(&mut r, &self.empuxo, &self.aterro, &self.cargas, theta, hv, &est);
+        let ph_q = formula_empuxo(&mut r, &self.empuxo, &self.aterro, &self.cargas, theta, hv, &est);
         let mut f_est = base.clone();
         f_est.extend(est.forcas.iter().cloned());
         analisar(&mut r, "estático", &f_est, b, &fundacao, self.df, &LimitesFs::estatico(fat));
+        let ph_total: f64 = est.forcas.iter().map(|f| f.h.max(0.0)).sum();
+        diagnostico_deslizamento(&mut r, ph_q, ph_total, self.considerar_passivo);
 
         // Caso sísmico
         if self.cargas.usar_sismo {
@@ -608,6 +649,40 @@ mod testes {
         m.empuxo.delta = m.empuxo.beta;
         let r = m.calcular(&Fatores::default());
         assert!(!r.avisos.iter().any(|a| a.contains("δ = β")));
+    }
+
+    #[test]
+    fn muro_1m_calculo_manual() {
+        // Bloco 0,60 × 1,00 m (F = 0), concreto simples γ = 24 → W = 14,4 kN/m a x = 0,30 m.
+        // Rankine φ = 30°, γ = 18, q = 0 → Pa = ½·⅓·18·1² = 3,0 kN/m a y = 1/3 m.
+        // FS tomb = M_res / M_tomb = 14,4·0,30 / (3,0·1/3) = 4,32
+        // FS desl = 14,4·tan(⅔·30°) / 3,0 = 1,747 ;  e = 0,30 − (4,32 − 1,0)/14,4 = 0,0694 m ≤ B/6 = 0,10
+        let mut m = MuroGravidade::default();
+        m.material = Material::ConcretoSimples;
+        m.h = 1.0;
+        m.f = 0.0;
+        m.crista = 0.6;
+        m.proj_frente = 0.0;
+        m.proj_tardoz = 0.0;
+        m.ressalto_frente = 0.0;
+        m.ressalto_tras = 0.0;
+        m.subpressao = false;
+        m.cargas.q_uniforme = 0.0;
+        m.fundacao.c = 0.0;
+        let r = m.calcular(&Fatores::default());
+        let v = |nome: &str| r.verificacoes.iter().find(|v| v.nome.starts_with(nome)).unwrap().valor;
+        assert!((v("FS tombamento") - 4.32).abs() < 0.01, "{}", v("FS tombamento"));
+        assert!((v("FS deslizamento") - 1.747).abs() < 0.01, "{}", v("FS deslizamento"));
+        assert!((v("Excentricidade") - 0.0694).abs() < 0.001, "{}", v("Excentricidade"));
+        // base de 0,60 m (B/H = 0,6) atende tombamento, deslizamento e excentricidade
+        assert!(r.verificacoes.iter().filter(|v| v.nome.contains("(estático)")).all(|v| v.ok()));
+
+        // Com q = 20 kPa: Ph,q = ⅓·20·1 = 6,67 kN/m → T = 9,67 ; FS desl = 5,24/9,67 = 0,54 e aviso didático
+        m.cargas.q_uniforme = 20.0;
+        let r = m.calcular(&Fatores::default());
+        let fs = r.verificacoes.iter().find(|v| v.nome.starts_with("FS deslizamento")).unwrap().valor;
+        assert!((fs - 0.542).abs() < 0.01, "{fs}");
+        assert!(r.avisos.iter().any(|a| a.contains("sobrecarga responde por 69")), "{:?}", r.avisos);
     }
 
     #[test]

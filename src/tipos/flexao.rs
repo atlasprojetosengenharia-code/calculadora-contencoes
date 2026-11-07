@@ -116,13 +116,15 @@ impl MuroFlexao {
             "K ativo (camada superior) = {} ; Pa = {} kN/m ; inclinação = {}° ; altura do plano = {} m",
             fmt(est.k), fmt(est.pa), fmt(est.incl.to_degrees()), fmt(hv)
         ));
-        formula_empuxo(&mut r, &self.empuxo, &self.aterro, &self.cargas, 0.0, hv, &est);
+        let ph_q = formula_empuxo(&mut r, &self.empuxo, &self.aterro, &self.cargas, 0.0, hv, &est);
         // NA no solo de fundação: o mais alto entre o informado e o do aterro.
         let fundacao = self.fundacao.com_na(self.aterro.na().map(|n| n - hv));
         let mut f = base.clone();
         f.extend(est.forcas.iter().cloned());
         let lim = LimitesFs::estatico(fat);
         let dist = analisar(&mut r, "estático", &f, b, &fundacao, self.df, &lim);
+        let ph_total: f64 = est.forcas.iter().map(|f| f.h.max(0.0)).sum();
+        super::gravidade::diagnostico_deslizamento(&mut r, ph_q, ph_total, self.considerar_passivo);
 
         if self.cargas.usar_sismo {
             let sis = empuxo_no_plano(&self.aterro, &self.cargas, &self.empuxo, 0.0, hv, &plano, true);

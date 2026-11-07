@@ -7,7 +7,14 @@
 //! a sua manutenção; NBR 16920-2 9.7.1 / 12: contenções sem drenagem interna
 //! devem considerar a água no dimensionamento.
 
-use crate::resultado::{fmt, Desenho, Estilo, Resultado};
+use crate::normas;
+use crate::resultado::{fmt, Desenho, Estilo, Resultado, Verificacao};
+
+/// Critérios de projeto (prática usual — não são exigências da ABNT).
+pub const DIAM_MIN_BARBACA_MM: f64 = 75.0;
+pub const DIAM_USUAL_MAX_MM: f64 = 100.0;
+pub const ESP_MAX_MALHA: f64 = 2.0;
+pub const ESP_MIN_FILTRO: f64 = 0.30;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -156,52 +163,160 @@ impl Drenagem {
     /// `larguras` = comprimento de cada barbacã (espessura do paramento na fila);
     /// `altura_filtro` = altura da camada drenante.
     pub fn relatar(&self, r: &mut Resultado, altura: f64, larguras: &[f64], altura_filtro: f64) {
-        r.titulo("Drenagem (NBR 11682 7.3.1 e) — por metro linear");
+        r.titulo("Drenagem — barbacãs, colchão drenante e drenos (por metro linear)");
+        r.norma(normas::NBR11682_DRENAGEM);
+
+        // 1. Condição de drenagem e água no cálculo
         r.linha(format!("Condição adotada no cálculo: {}", self.condicao.nome()));
         match self.condicao {
-            Condicao::Drenada => r.aviso(
-                "Poropressão desprezada no maciço contido: exige sistema de drenagem eficiente e plano de manutenção (NBR 11682 Seção 10).",
-            ),
-            Condicao::Parcial => r.linha(format!(
-                "Lâmina d'água considerada: {} da altura contida ({} m)",
-                fmt(self.fracao_parcial),
-                fmt(self.fracao_parcial * altura)
-            )),
-            Condicao::SemDrenagem => r.aviso(
-                "Contenção sem drenagem interna: dimensionada com o NA da sondagem (NBR 16920-2, 12). Verifique se o NA informado é o crítico.",
-            ),
+            Condicao::Drenada => {
+                r.formula(
+                    "Água no maciço contido — condição drenada",
+                    "u = 0  (poropressão desprezada atrás da contenção)",
+                    "Sistema de drenagem eficiente e mantido",
+                    "Empuxo hidrostático U = 0 kN/m",
+                );
+                r.norma(normas::NBR11682_MANUTENCAO);
+                r.aviso(
+                    "Poropressão desprezada no maciço contido: exige sistema de drenagem eficiente e plano de manutenção (NBR 11682 Seção 10).",
+                );
+            }
+            Condicao::Parcial => {
+                let hw = self.fracao_parcial.clamp(0.0, 1.0) * altura;
+                r.formula(
+                    "Água no maciço contido — lâmina parcial",
+                    "hw = f·H ;  U = ½·γw·hw²",
+                    format!("hw = {}·{} ;  U = ½·10·{}²", fmt(self.fracao_parcial), fmt(altura), fmt(hw)),
+                    format!("hw = {} m ;  U = {} kN/m (incluído no empuxo)", fmt(hw), fmt(0.5 * 10.0 * hw * hw)),
+                );
+            }
+            Condicao::SemDrenagem => {
+                r.norma(normas::NBR16920_DRENAGEM);
+                r.aviso(
+                    "Contenção sem drenagem interna: dimensionada com o NA da sondagem (NBR 16920-2, 12). Verifique se o NA informado é o crítico.",
+                );
+            }
         }
+
+        // 2. Barbacãs
         if self.barbacas && !larguras.is_empty() {
             let por_m = larguras.len() as f64 / self.esp_h;
+            let por_m2 = 1.0 / (self.esp_h * self.esp_v);
+            let d = self.diam_barbaca_mm / 1000.0;
+            let area_furo = std::f64::consts::PI * d * d / 4.0;
             let tubo: f64 = larguras.iter().sum::<f64>() / self.esp_h;
+            let l_max = larguras.iter().cloned().fold(0.0, f64::max);
             r.linha(format!(
-                "Barbacãs: tubo PVC Ø {} mm, malha {} m (h) × {} m (v), 1ª fila a {} m, declividade {} % para fora",
-                fmt(self.diam_barbaca_mm), fmt(self.esp_h), fmt(self.esp_v), fmt(self.altura_1a_fila), fmt(self.declividade)
+                "Barbacãs: tubo PVC Ø {} mm, malha {} m (h) × {} m (v), {} filas, 1ª fila a {} m, declividade {} % para fora",
+                format!("{:.0}", self.diam_barbaca_mm),
+                fmt(self.esp_h),
+                fmt(self.esp_v),
+                larguras.len(),
+                fmt(self.altura_1a_fila),
+                fmt(self.declividade)
             ));
-            r.linha(format!(
-                "  {} filas → {} barbacãs/m ; tubo ≈ {} m/m ; extremidade interna protegida com geotêxtil/tela",
-                larguras.len(), fmt(por_m), fmt(tubo)
+            r.formula(
+                "Malha de barbacãs",
+                "n/m = nº de filas / Sh ;  n/m² = 1 / (Sh·Sv) ;  A_dren = (n/m²)·π·Ø²/4 ;  L_tubo = Σ e_fila / Sh",
+                format!(
+                    "n/m = {} / {} ;  n/m² = 1 / ({}·{}) ;  A_dren = {}·π·{}²/4",
+                    larguras.len(),
+                    fmt(self.esp_h),
+                    fmt(self.esp_h),
+                    fmt(self.esp_v),
+                    fmt(por_m2),
+                    fmt(d)
+                ),
+                format!(
+                    "{} barbacãs/m ;  {} barbacãs/m² ;  A_dren = {} cm²/m² ;  tubo ≈ {} m/m",
+                    fmt(por_m),
+                    fmt(por_m2),
+                    fmt(por_m2 * area_furo * 1e4),
+                    fmt(tubo)
+                ),
+            );
+            r.formula(
+                "Caimento do barbacã",
+                "Δh = L·i",
+                format!("Δh = {} m·{} %", fmt(l_max), fmt(self.declividade)),
+                format!(
+                    "Δh = {} cm na fila mais longa (saída livre na face; extremidade interna protegida com geotêxtil)",
+                    fmt(l_max * self.declividade)
+                ),
+            );
+            r.verif(Verificacao::min(
+                format!(
+                    "Barbacãs: Ø ≥ {} mm (critério de projeto; usual {}–{} mm)",
+                    format!("{:.0}", DIAM_MIN_BARBACA_MM),
+                    format!("{:.0}", DIAM_MIN_BARBACA_MM),
+                    format!("{:.0}", DIAM_USUAL_MAX_MM)
+                ),
+                self.diam_barbaca_mm,
+                DIAM_MIN_BARBACA_MM,
+                "mm",
             ));
-        } else if self.barbacas {
-            r.linha("Barbacãs: altura insuficiente para a malha informada.");
-        }
-        if self.filtro {
-            let vol = self.esp_filtro * altura_filtro;
-            r.linha(format!(
-                "Filtro: {} com espessura {} m e altura {} m → {} m³/m",
-                self.material_filtro.nome(), fmt(self.esp_filtro), fmt(altura_filtro), fmt(vol)
+            r.verif(Verificacao::max(
+                format!("Barbacãs: espaçamento horizontal ≤ {} m (critério de projeto)", fmt(ESP_MAX_MALHA)),
+                self.esp_h,
+                ESP_MAX_MALHA,
+                "m",
             ));
-            if self.material_filtro == MaterialFiltro::BritaGeotextil {
-                r.linha(format!(
-                    "  Geotêxtil envolvendo a brita ≈ {} m²/m",
-                    fmt(2.0 * altura_filtro + 2.0 * self.esp_filtro)
+            r.verif(Verificacao::max(
+                format!("Barbacãs: espaçamento vertical ≤ {} m (critério de projeto)", fmt(ESP_MAX_MALHA)),
+                self.esp_v,
+                ESP_MAX_MALHA,
+                "m",
+            ));
+            if self.diam_barbaca_mm > DIAM_USUAL_MAX_MM {
+                r.aviso(format!(
+                    "Barbacãs com Ø {} mm, acima da faixa usual de {}–{} mm: verificar o enfraquecimento do paramento.",
+                    format!("{:.0}", self.diam_barbaca_mm),
+                    format!("{:.0}", DIAM_MIN_BARBACA_MM),
+                    format!("{:.0}", DIAM_USUAL_MAX_MM)
                 ));
             }
-            r.linha("  Topo do filtro selado com solo argiloso compactado (≈ 0,3 m) para impedir a entrada de águas superficiais.");
+        } else if self.barbacas {
+            r.linha("Barbacãs: não aplicáveis a este tipo de contenção ou altura insuficiente para a malha informada.");
         }
+
+        // 3. Colchão drenante (filtro)
+        if self.filtro && altura_filtro > 0.0 {
+            let vol = self.esp_filtro * altura_filtro;
+            r.formula(
+                format!("Colchão drenante — {}", self.material_filtro.nome()),
+                "h_f = H − 0,30 (selagem) ;  V = e·h_f ;  A_geotêxtil = 2·(h_f + e)",
+                format!("h_f = {} m ;  V = {}·{}", fmt(altura_filtro), fmt(self.esp_filtro), fmt(altura_filtro)),
+                if self.material_filtro == MaterialFiltro::BritaGeotextil {
+                    format!(
+                        "V = {} m³/m de brita ;  geotêxtil ≈ {} m²/m",
+                        fmt(vol),
+                        fmt(2.0 * altura_filtro + 2.0 * self.esp_filtro)
+                    )
+                } else {
+                    format!("V = {} m³/m", fmt(vol))
+                },
+            );
+            if self.material_filtro != MaterialFiltro::Geocomposto {
+                r.formula(
+                    "Critérios de filtro (Terzaghi) — conferir com a granulometria do solo e do material drenante",
+                    "Retenção: D15,f / D85,s ≤ 4 a 5 ;  Permeabilidade: D15,f / D15,s ≥ 4 a 5",
+                    "D15,f = diâmetro a 15 % do filtro ;  D85,s e D15,s = diâmetros do solo protegido",
+                    "Com geotêxtil envolvendo a brita, a retenção é dada pela abertura de filtração do geotêxtil",
+                );
+                r.verif(Verificacao::min(
+                    format!("Colchão drenante: espessura ≥ {} m (critério de projeto)", fmt(ESP_MIN_FILTRO)),
+                    self.esp_filtro,
+                    ESP_MIN_FILTRO,
+                    "m",
+                ));
+            }
+            r.linha("Topo do filtro selado com solo argiloso compactado (≈ 0,3 m) para impedir a entrada de águas superficiais.");
+        }
+
+        // 4. Demais dispositivos
         if self.dreno_pe {
             r.linha(format!(
-                "Dreno de pé: tubo perfurado Ø {} mm, 1,0 m/m, com saída livre e declividade longitudinal ≥ 1 %",
+                "Dreno de pé: tubo perfurado Ø {} mm, 1,0 m/m, envolto no colchão, com saída livre e declividade longitudinal ≥ 1 %",
                 fmt(self.diam_dreno_pe_mm)
             ));
         }
@@ -209,13 +324,44 @@ impl Drenagem {
             r.linha("Canaleta de crista: 1,0 m/m, interceptando o escoamento superficial a montante.");
         }
         if self.dhp {
-            r.linha(format!(
-                "DHP: drenos sub-horizontais profundos L = {} m a cada {} m → {} m de dreno por metro",
-                fmt(self.dhp_comprimento), fmt(self.dhp_espacamento), fmt(self.dhp_comprimento / self.dhp_espacamento.max(0.5))
-            ));
+            r.formula(
+                "Drenos sub-horizontais profundos (DHP)",
+                "L_dren/m = L / s",
+                format!("L_dren/m = {} / {}", fmt(self.dhp_comprimento), fmt(self.dhp_espacamento.max(0.5))),
+                format!("{} m de dreno por metro de contenção", fmt(self.dhp_comprimento / self.dhp_espacamento.max(0.5))),
+            );
         }
         if !self.barbacas && !self.filtro && !self.dhp && self.condicao == Condicao::Drenada {
             r.aviso("Condição 'drenada' sem nenhum elemento de drenagem definido — incoerente.");
         }
+    }
+}
+
+#[cfg(test)]
+mod testes {
+    use super::*;
+
+    #[test]
+    fn memorial_de_drenagem() {
+        let d = Drenagem::default();
+        let mut r = Resultado::default();
+        d.relatar(&mut r, 4.0, &[0.6, 0.5, 0.4], 3.7);
+        let nomes: Vec<&str> = r.verificacoes.iter().map(|v| v.nome.as_str()).collect();
+        assert!(nomes.iter().any(|n| n.contains("Ø ≥ 75 mm")));
+        assert!(nomes.iter().any(|n| n.contains("espessura ≥ 0,30 m")));
+        assert!(r.atende(), "padrões devem atender");
+        let t = r.texto_completo("x");
+        assert!(t.contains("Malha de barbacãs") && t.contains("Colchão drenante") && t.contains("7.3.1 e)"));
+        // Ø 50 mm e malha 2,5 m reprovam
+        let mut d2 = d.clone();
+        d2.diam_barbaca_mm = 50.0;
+        d2.esp_h = 2.5;
+        let mut r2 = Resultado::default();
+        d2.relatar(&mut r2, 4.0, &[0.6], 3.7);
+        assert_eq!(r2.verificacoes.iter().filter(|v| !v.ok()).count(), 2);
+        // sem barbacãs/filtro aplicáveis (ex.: estaca-prancha): nenhuma verificação
+        let mut r3 = Resultado::default();
+        d.relatar(&mut r3, 4.0, &[], 0.0);
+        assert!(r3.verificacoes.is_empty());
     }
 }

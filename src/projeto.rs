@@ -281,7 +281,10 @@ impl Projeto {
             t(format!("Local: {}", if self.local.is_empty() { "—" } else { &self.local })),
             t(format!("Responsável técnico: {}", if self.responsavel.is_empty() { "—" } else { &self.responsavel })),
             t(format!("Tipo de contenção: {}", self.tipo.nome())),
-            Bloco::Titulo(format!("Sondagem {} (SPT)", self.sondagem.identificacao)),
+            Bloco::Titulo(match self.sondagem.modo {
+                crate::spt::ModoSolo::Completo => format!("Sondagem {} (SPT)", self.sondagem.identificacao),
+                crate::spt::ModoSolo::Simplificado => "Solo — entrada simplificada na base (SPT)".into(),
+            }),
         ];
         let s = &self.sondagem;
         cab.push(t(format!(
@@ -309,11 +312,21 @@ impl Projeto {
             resultado: "Parâmetros por camada na tabela abaixo (estimativas a confirmar por ensaios)".into(),
         }));
         cab.push(t(format!("{:<13} {:>5}  {:<34} {:>6} {:>6} {:>6} {:>6}  {}", "Prof. (m)", "NSPT", "Descrição", "γ", "γsat", "c'", "φ'", "origem")));
-        for (i, c) in s.camadas.iter().enumerate() {
+        if s.modo == crate::spt::ModoSolo::Simplificado {
+            cab.push(t(format!(
+                "Solo homogêneo adotado no maciço contido e na fundação: {} com NSPT = {} ({}).",
+                s.simples_tipo.nome(),
+                fmt(s.simples_nspt),
+                crate::spt::compacidade(s.simples_tipo, s.simples_nspt)
+            )));
+        }
+        let cs = s.camadas_calc();
+        for (i, c) in cs.iter().enumerate() {
             let desc: String = c.descricao.chars().take(34).collect();
+            let de = if i == 0 { 0.0 } else { cs[i - 1].ate };
             cab.push(t(format!(
                 "{:<13} {:>5}  {:<34} {:>6} {:>6} {:>6} {:>6}  {}",
-                format!("{}–{}", fmt(s.de(i)), fmt(c.ate)),
+                format!("{}–{}", fmt(de), fmt(c.ate)),
                 fmt(c.nspt),
                 desc,
                 fmt(c.gamma),

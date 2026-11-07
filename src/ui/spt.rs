@@ -3,7 +3,7 @@
 use super::tema;
 use super::widgets::{cartao, nota, titulo};
 use crate::resultado::fmt;
-use crate::spt::{compacidade, importar, CamadaSpt, CondicaoCoesivos, MetodoPhi, Sondagem, TipoSolo, TIPOS};
+use crate::spt::{compacidade, importar, CamadaSpt, CondicaoCoesivos, MetodoPhi, ModoSolo, Sondagem, TipoSolo, TIPOS};
 use eframe::egui::{self, Color32, RichText, Stroke};
 
 /// Lê arquivo de texto aceitando UTF-8 ou Windows-1252/Latin-1 (CSV do Excel).
@@ -26,6 +26,9 @@ pub fn mostrar(ui: &mut egui::Ui, s: &mut Sondagem, h_contencao: f64) -> Option<
         ui.add_space(12.0);
         ui.label("Identificação:");
         ui.add(egui::TextEdit::singleline(&mut s.identificacao).desired_width(110.0));
+        if s.modo != ModoSolo::Completo {
+            return;
+        }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui.button("🗑 Limpar").on_hover_text("Remove todas as camadas").clicked() {
                 s.camadas.clear();
@@ -68,6 +71,21 @@ pub fn mostrar(ui: &mut egui::Ui, s: &mut Sondagem, h_contencao: f64) -> Option<
         });
     });
     ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Modo de entrada do solo:").font(tema::fonte_forte(14.0)));
+        for m in [ModoSolo::Completo, ModoSolo::Simplificado] {
+            mudou |= ui.selectable_value(&mut s.modo, m, format!(" {} ", m.nome())).changed();
+        }
+    });
+    ui.add_space(6.0);
+
+    if s.modo == ModoSolo::Simplificado {
+        mudou |= simplificado(ui, s);
+        if mudou {
+            s.recalcular();
+        }
+        return msg;
+    }
 
     let largura_grafico = 300.0f32.min(ui.available_width() * 0.32);
     ui.horizontal_top(|ui| {
@@ -86,35 +104,7 @@ pub fn mostrar(ui: &mut egui::Ui, s: &mut Sondagem, h_contencao: f64) -> Option<
                 ui.add_space(10.0);
                 cartao(ui, |ui| {
                     titulo(ui, "Nível d'água e correlações");
-                    ui.horizontal(|ui| {
-                        mudou |= ui.checkbox(&mut s.usar_na, "Nível d'água encontrado a").changed();
-                        mudou |= ui
-                            .add_enabled(s.usar_na, egui::DragValue::new(&mut s.prof_na).speed(0.05).range(0.0..=100.0).suffix(" m"))
-                            .changed();
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("φ' de solos granulares:");
-                        egui::ComboBox::from_id_salt("metodo_phi").selected_text(s.metodo_phi.nome()).width(260.0).show_ui(ui, |ui| {
-                            for m in [MetodoPhi::Teixeira1996, MetodoPhi::Godoy1983] {
-                                mudou |= ui.selectable_value(&mut s.metodo_phi, m, m.nome()).changed();
-                            }
-                        });
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Solos coesivos:");
-                        mudou |= ui.radio_value(&mut s.coesivos, CondicaoCoesivos::Drenada, "Drenado (longo prazo)").changed();
-                        mudou |= ui
-                            .radio_value(&mut s.coesivos, CondicaoCoesivos::NaoDrenada, "Não drenado: Su = 10·N, φ = 0")
-                            .changed();
-                    });
-                    if s.coesivos == CondicaoCoesivos::Drenada {
-                        ui.horizontal(|ui| {
-                            ui.label("   c' adotado");
-                            mudou |= ui.add(egui::DragValue::new(&mut s.c_drenado).speed(0.5).range(0.0..=200.0).suffix(" kPa")).changed();
-                            ui.label("φ' adotado");
-                            mudou |= ui.add(egui::DragValue::new(&mut s.phi_drenado).speed(0.25).range(0.0..=45.0).suffix(" °")).changed();
-                        });
-                    }
+                    mudou |= correlacoes(ui, s);
                     nota(ui, "γ por Godoy (1972). Correlações são estimativas: confirme com ensaios (NBR 11682 Anexo D). Clique em “Auto” para ajustar valores manualmente.");
                 });
                 ui.add_space(10.0);
@@ -142,6 +132,109 @@ pub fn mostrar(ui: &mut egui::Ui, s: &mut Sondagem, h_contencao: f64) -> Option<
         s.recalcular();
     }
     msg
+}
+
+/// Nível d'água e escolha das correlações (comum aos dois modos).
+fn correlacoes(ui: &mut egui::Ui, s: &mut Sondagem) -> bool {
+    let mut mudou = false;
+    ui.horizontal(|ui| {
+        mudou |= ui.checkbox(&mut s.usar_na, "Nível d'água encontrado a").changed();
+        mudou |= ui
+            .add_enabled(s.usar_na, egui::DragValue::new(&mut s.prof_na).speed(0.05).range(0.0..=100.0).suffix(" m"))
+            .changed();
+    });
+    ui.horizontal(|ui| {
+        ui.label("φ' de solos granulares:");
+        egui::ComboBox::from_id_salt("metodo_phi").selected_text(s.metodo_phi.nome()).width(260.0).show_ui(ui, |ui| {
+            for m in [MetodoPhi::Teixeira1996, MetodoPhi::Godoy1983] {
+                mudou |= ui.selectable_value(&mut s.metodo_phi, m, m.nome()).changed();
+            }
+        });
+    });
+    ui.horizontal(|ui| {
+        ui.label("Solos coesivos:");
+        mudou |= ui.radio_value(&mut s.coesivos, CondicaoCoesivos::Drenada, "Drenado (longo prazo)").changed();
+        mudou |= ui
+            .radio_value(&mut s.coesivos, CondicaoCoesivos::NaoDrenada, "Não drenado: Su = 10·N, φ = 0")
+            .changed();
+    });
+    if s.coesivos == CondicaoCoesivos::Drenada {
+        ui.horizontal(|ui| {
+            ui.label("   c' adotado");
+            mudou |= ui.add(egui::DragValue::new(&mut s.c_drenado).speed(0.5).range(0.0..=200.0).suffix(" kPa")).changed();
+            ui.label("φ' adotado");
+            mudou |= ui.add(egui::DragValue::new(&mut s.phi_drenado).speed(0.25).range(0.0..=45.0).suffix(" °")).changed();
+        });
+    }
+    mudou
+}
+
+/// Entrada simplificada: NSPT + tipo de solo predominante na base.
+fn simplificado(ui: &mut egui::Ui, s: &mut Sondagem) -> bool {
+    let mut mudou = false;
+    let p = tema::de(ui);
+    ui.columns(2, |c| {
+        cartao(&mut c[0], |ui| {
+            titulo(ui, "Entrada simplificada na base");
+            nota(ui, "Informe o NSPT representativo e o tipo de solo predominante na fundação; γ, φ' e c' são estimados por correlação.");
+            egui::Grid::new("spt_simples").num_columns(2).spacing([14.0, 8.0]).show(ui, |ui| {
+                ui.label("NSPT");
+                mudou |= ui
+                    .add_sized([110.0, 24.0], egui::DragValue::new(&mut s.simples_nspt).speed(0.2).range(0.0..=60.0).max_decimals(0))
+                    .changed();
+                ui.end_row();
+                ui.label("Tipo de solo");
+                egui::ComboBox::from_id_salt("tipo_simples").selected_text(s.simples_tipo.nome()).width(180.0).show_ui(ui, |ui| {
+                    for t in TIPOS {
+                        mudou |= ui.selectable_value(&mut s.simples_tipo, t, t.nome()).changed();
+                    }
+                });
+                ui.end_row();
+            });
+            ui.add_space(6.0);
+            mudou |= correlacoes(ui, s);
+            nota(ui, "Solo homogêneo: o mesmo solo é usado no maciço contido e na fundação. Para perfis estratificados, use o SPT completo.");
+        });
+        cartao(&mut c[1], |ui| {
+            titulo(ui, "Parâmetros estimados");
+            let cam = s.camada_simplificada();
+            let estado = compacidade(s.simples_tipo, s.simples_nspt);
+            egui::Grid::new("spt_simples_res").num_columns(3).striped(true).spacing([16.0, 6.0]).show(ui, |ui| {
+                let linha = |ui: &mut egui::Ui, nome: &str, valor: String, origem: &str| {
+                    ui.label(nome);
+                    ui.label(RichText::new(valor).font(tema::fonte_forte(15.0)).color(p.destaque));
+                    ui.label(RichText::new(origem).small().color(p.fraco));
+                    ui.end_row();
+                };
+                let granular = s.simples_tipo.granular();
+                linha(ui, "Estado", estado.to_string(), if granular { "compacidade (NBR 6484)" } else { "consistência (NBR 6484)" });
+                linha(ui, "γ", format!("{} kN/m³", fmt(cam.gamma)), "Godoy (1972)");
+                linha(ui, "γsat", format!("{} kN/m³", fmt(cam.gamma_sat)), "Godoy (1972)");
+                let origem_phi = if granular {
+                    match s.metodo_phi {
+                        MetodoPhi::Teixeira1996 => "Teixeira (1996): √(20N) + 15",
+                        MetodoPhi::Godoy1983 => "Godoy (1983): 28 + 0,4N",
+                    }
+                } else if s.coesivos == CondicaoCoesivos::NaoDrenada {
+                    "não drenado: φ = 0"
+                } else {
+                    "valor adotado (drenado)"
+                };
+                linha(ui, "φ'", format!("{}°", fmt(cam.phi)), origem_phi);
+                let origem_c = if granular {
+                    "granular: c' = 0"
+                } else if s.coesivos == CondicaoCoesivos::NaoDrenada {
+                    "Su = 10·N (Teixeira e Godoy, 1996)"
+                } else {
+                    "valor adotado (drenado)"
+                };
+                linha(ui, "c'", format!("{} kPa", fmt(cam.c)), origem_c);
+            });
+            ui.add_space(6.0);
+            nota(ui, "Estimativas por correlação — confirme com ensaios (NBR 11682 Anexo D).");
+        });
+    });
+    mudou
 }
 
 fn tabela(ui: &mut egui::Ui, s: &mut Sondagem) -> bool {

@@ -160,3 +160,23 @@ pub const NBR6120_PESOS: RefNorma = r(
     "Pesos específicos aparentes dos materiais de construção; para materiais compostos, adotado o limite \
      inferior dos constituintes (a favor da segurança).",
 );
+
+// --- Drenagem ---------------------------------------------------------------
+
+pub const NBR11682_DRENAGEM: RefNorma = r(
+    "ABNT NBR 11682:2009",
+    "7.3.1 e)",
+    "O projeto deve detalhar os elementos de drenagem (dimensões, materiais, declividades, selagem e pontos de \
+     saída d'água) e a sua compatibilidade com a solução de estabilização.",
+);
+pub const NBR11682_MANUTENCAO: RefNorma = r(
+    "ABNT NBR 11682:2009",
+    "Seção 10",
+    "Obras de estabilização exigem plano de manutenção, incluindo inspeção e limpeza periódica dos dispositivos \
+     de drenagem; sem ela, a hipótese de maciço drenado deixa de valer.",
+);
+pub const NBR16920_DRENAGEM: RefNorma = r(
+    "ABNT NBR 16920-2:2021",
+    "9.7.1 e Seção 12",
+    "Contenções sem drenagem interna eficiente devem considerar a pressão d'água no dimensionamento.",
+);
