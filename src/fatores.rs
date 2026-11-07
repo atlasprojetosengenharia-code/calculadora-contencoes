@@ -64,6 +64,13 @@ pub struct Fatores {
     /// verificado só com as ações permanentes (a combinação total segue coberta
     /// pela área comprimida ≥ 2/3 da NBR 6122 7.6.2). Padrão: desligado.
     pub terco_central_permanente: bool,
+    /// Exceção justificada à NBR 11682 7.3.3.1 (critério de Marchetti 3.3):
+    /// e > B/6 aceito com redistribuição de tensões sem tração (σmáx = 2N/3c),
+    /// mantida a área comprimida ≥ 2/3 (NBR 6122 7.6.2). Padrão: desligado.
+    pub excentricidade_redistribuicao: bool,
+    /// Sobrecarga sobre o talão somada às forças verticais resistentes
+    /// (Marchetti 4.2). Padrão: desligado (ação variável favorável desprezada).
+    pub sobrecarga_talao_estabilizante: bool,
 
     // --- Caso sísmico (muros) ---
     pub fs_deslizamento_sismo: f64,
@@ -125,6 +132,8 @@ impl Default for Fatores {
             excentricidade_max: 1.0 / 6.0,
             area_comprimida_min: 2.0 / 3.0,
             terco_central_permanente: false,
+            excentricidade_redistribuicao: false,
+            sobrecarga_talao_estabilizante: false,
 
             fs_deslizamento_sismo: 1.5,
             fs_tombamento_sismo: 2.0,

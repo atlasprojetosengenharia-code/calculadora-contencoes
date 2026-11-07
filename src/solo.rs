@@ -185,6 +185,21 @@ impl Cargas {
 }
 
 /// Solo de fundação (abaixo da base de muros).
+/// Forma do coeficiente de atrito na base.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub enum CriterioAtrito {
+    /// tan δb com δb = k·φ' (usual: k = 2/3).
+    AnguloReduzido,
+    /// f = k·tan φ' (Marchetti, Muros de Arrimo, 3.1: k = 0,67 a 0,9).
+    TangenteReduzida,
+}
+
+impl Default for CriterioAtrito {
+    fn default() -> Self {
+        CriterioAtrito::AnguloReduzido
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SoloFundacao {
@@ -195,6 +210,8 @@ pub struct SoloFundacao {
     pub c: f64,
     /// Ângulo de atrito solo-base como fração de φ (tipicamente 2/3).
     pub frac_delta_base: f64,
+    /// Como `frac_delta_base` entra no atrito: tan(k·φ) ou k·tan φ.
+    pub criterio_atrito: CriterioAtrito,
     /// Adesão solo-base como fração de c.
     pub frac_adesao: f64,
     /// Profundidade do NA abaixo da cota da base (m); ≤ 0 = NA na base ou
@@ -211,6 +228,7 @@ impl Default for SoloFundacao {
             phi: 30.0,
             c: 10.0,
             frac_delta_base: 2.0 / 3.0,
+            criterio_atrito: CriterioAtrito::AnguloReduzido,
             frac_adesao: 0.5,
             na_abaixo_base: None,
         }
@@ -218,6 +236,15 @@ impl Default for SoloFundacao {
 }
 
 impl SoloFundacao {
+    /// Coeficiente de atrito solo-base usado no deslizamento.
+    pub fn coef_atrito(&self) -> f64 {
+        let phi = self.phi.to_radians();
+        match self.criterio_atrito {
+            CriterioAtrito::AnguloReduzido => (phi * self.frac_delta_base).tan(),
+            CriterioAtrito::TangenteReduzida => self.frac_delta_base * phi.tan(),
+        }
+    }
+
     /// Peso específico submerso γ' = γsat − γw.
     pub fn gamma_sub(&self) -> f64 {
         (self.gamma_sat - GAMMA_W).max(0.0)

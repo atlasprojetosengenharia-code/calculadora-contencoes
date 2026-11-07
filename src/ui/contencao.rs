@@ -10,7 +10,7 @@ use crate::empuxo::{ParamEmpuxo, Teoria};
 use crate::fatores::Fatores;
 use crate::projeto::{Projeto, TipoContencao, TIPOS_CONTENCAO};
 use crate::resultado::{fmt, Resultado};
-use crate::solo::{Cargas, SoloFundacao};
+use crate::solo::{Cargas, CriterioAtrito, SoloFundacao};
 use crate::tipos::atirantada::{CortinaAtirantada, Diagrama};
 use crate::tipos::embutida::{Apoio, EstacaPrancha, ParedeEmbutida, ParedeEstacas};
 use crate::tipos::flexao::MuroFlexao;
@@ -197,10 +197,35 @@ fn teoria(ui: &mut egui::Ui, e: &mut ParamEmpuxo) {
 fn fundacao(ui: &mut egui::Ui, f: &mut SoloFundacao, onde: &str) {
     egui::CollapsingHeader::new("Contato base-solo de fundação").id_salt(onde).show(ui, |ui| {
         nota(ui, &format!("γ, φ' e c' da fundação: camada da sondagem {onde}."));
+        ui.horizontal(|ui| {
+            ui.label("Atrito na base:");
+            ui.selectable_value(&mut f.criterio_atrito, CriterioAtrito::AnguloReduzido, " tan(k·φ') ");
+            ui.selectable_value(&mut f.criterio_atrito, CriterioAtrito::TangenteReduzida, " k·tg φ' (Marchetti) ");
+        });
         grade(ui, &format!("fund_{onde}"), |ui| {
-            num(ui, "δ base / φ'", &mut f.frac_delta_base, "", 0.0..=1.0, 0.01);
+            let rot = if f.criterio_atrito == CriterioAtrito::AnguloReduzido { "k = δ base / φ'" } else { "k (f = k·tg φ')" };
+            num(ui, rot, &mut f.frac_delta_base, "", 0.0..=1.0, 0.01);
             num(ui, "Adesão / c'", &mut f.frac_adesao, "", 0.0..=1.0, 0.01);
         });
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Predefinições:");
+            if ui.small_button("⅔φ (usual)").clicked() {
+                f.criterio_atrito = CriterioAtrito::AnguloReduzido;
+                f.frac_delta_base = 2.0 / 3.0;
+            }
+            if ui.small_button("0,67·tg φ").clicked() {
+                f.criterio_atrito = CriterioAtrito::TangenteReduzida;
+                f.frac_delta_base = 0.67;
+            }
+            if ui.small_button("0,9·tg φ (base compacta)").clicked() {
+                f.criterio_atrito = CriterioAtrito::TangenteReduzida;
+                f.frac_delta_base = 0.9;
+            }
+        });
+        nota(ui, &format!(
+            "Coeficiente de atrito resultante: {}. Marchetti 3.1: f = 0,67·tg φ a tg φ ; c' = 0,5c a 0,67c ; recomenda Ep = 0 (solo à frente pode ser erodido).",
+            crate::resultado::fmt(f.coef_atrito())
+        ));
     });
 }
 

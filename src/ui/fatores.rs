@@ -67,6 +67,19 @@ pub fn mostrar(ui: &mut egui::Ui, f: &mut Fatores) {
                 if f.terco_central_permanente {
                     ui.label(RichText::new("⚠ Exceção à NBR 11682 7.3.3.1 — registre a justificativa no projeto.").small().color(super::tema::de(ui).alerta));
                 }
+                ui.checkbox(
+                    &mut f.excentricidade_redistribuicao,
+                    "Critério prático (Marchetti 3.3): aceitar e > B/6 com redistribuição sem tração",
+                )
+                .on_hover_text("Base tratada como não resistente à tração: σmáx = 2N/(3c), c = B/2 − e. O terço central passa a ser informativo; continuam valendo a área comprimida ≥ 2/3 (NBR 6122 7.6.2) e a capacidade de carga com B' = B − 2e.");
+                if f.excentricidade_redistribuicao {
+                    ui.label(RichText::new("⚠ Exceção à NBR 11682 7.3.3.1 — registre a justificativa no projeto.").small().color(super::tema::de(ui).alerta));
+                }
+                ui.checkbox(
+                    &mut f.sobrecarga_talao_estabilizante,
+                    "Muro de flexão: sobrecarga sobre o talão como força estabilizante (Marchetti 4.2)",
+                )
+                .on_hover_text("O exemplo do livro soma q·L_talão às forças verticais no deslizamento e no tombamento. Pelo critério usual a ação variável favorável é desprezada (desligado).");
                 ui.add_space(4.0);
                 ui.label(RichText::new("Caso sísmico").strong());
                 grade(ui, "sis", |ui| {

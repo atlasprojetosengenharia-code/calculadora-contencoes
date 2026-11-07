@@ -592,6 +592,11 @@ impl MuroGravidade {
                 if prop.tau_max.is_finite() { format!(" ≤ {}", fmt(prop.tau_max)) } else { String::new() }
             ),
         );
+        let concreto = matches!(self.material, Material::ConcretoSimples | Material::ConcretoCiclopico);
+        let k_tau = if concreto { 1.5 } else { 1.0 };
+        if concreto {
+            r.norma(normas::MARCHETTI_CICLOPICO);
+        }
         let incl = self.empuxo.inclinacao_ativa(theta);
         let mut pior_comp = 0.0f64;
         let mut pior_tracao = f64::INFINITY;
@@ -629,7 +634,9 @@ impl MuroGravidade {
                 let xr = x_r.min(w - x_r).max(1e-3);
                 (2.0 * n / (3.0 * xr), -n / w * (6.0 * e.abs() / w - 1.0))
             };
-            let tau = ph / w / 1000.0;
+            // concreto simples/ciclópico: τwd = 1,5·V/(b·h) — pico da distribuição
+            // parabólica (Marchetti 2.1 c); juntas de alvenaria: τ médio.
+            let tau = k_tau * ph / w / 1000.0;
             let tadm = prop.tau_adm(n / w / 1000.0);
             r.linha(format!(
                 "y = {} m (largura {} m): N = {} kN/m ; H = {} kN/m ; e = {} m ; σmáx = {} kPa ; σmín = {} kPa ; τ = {} kPa",
@@ -652,7 +659,7 @@ impl MuroGravidade {
         r.verif(Verificacao::min("Tensão mín. no corpo (tração)", pior_tracao / 1000.0, -prop.tracao_adm, "MPa"));
         r.formula(
             format!("Cisalhamento na junta horizontal mais solicitada (y = {} m)", fmt(pior_cis.3)),
-            "τ = H / b ;  τadm = c0 + μ·(N/b)",
+            if concreto { "τ = 1,5·H / b ;  τadm = c0 + μ·(N/b)" } else { "τ = H / b ;  τadm = c0 + μ·(N/b)" },
             "H = empuxo horizontal acima da junta ;  N/b = compressão média na junta",
             format!(
                 "τ = {} MPa ;  τadm = {} MPa",
@@ -928,6 +935,45 @@ mod testes {
         let fs = r.verificacoes.iter().find(|v| v.nome.starts_with("FS deslizamento")).unwrap().valor;
         assert!((fs - 0.542).abs() < 0.01, "{fs}");
         assert!(r.avisos.iter().any(|a| a.contains("sobrecarga responde por 69")), "{:?}", r.avisos);
+    }
+
+    /// Base mínima (bloco retangular) de um muro de 1 m que atende todas as
+    /// verificações estáticas de estabilidade.
+    fn base_minima_1m(fat: &Fatores, prep: impl Fn(&mut MuroGravidade)) -> f64 {
+        let mut m = MuroGravidade::default();
+        m.material = Material::ConcretoCiclopico;
+        m.h = 1.0;
+        m.f = 0.3;
+        m.proj_frente = 0.0;
+        m.proj_tardoz = 0.0;
+        m.ressalto_frente = 0.0;
+        m.ressalto_tras = 0.0;
+        m.cargas.q_uniforme = 20.0;
+        prep(&mut m);
+        let mut b = 0.30;
+        while b < 3.0 {
+            m.crista = b;
+            let r = m.calcular(fat);
+            if r.verificacoes.iter().filter(|v| v.nome.contains("(estático)")).all(|v| v.ok()) {
+                return b;
+            }
+            b += 0.05;
+        }
+        f64::INFINITY
+    }
+
+    #[test]
+    fn criterios_marchetti_reduzem_base_do_muro_baixo() {
+        let padrao = base_minima_1m(&Fatores::default(), |_| {});
+        let mut fat = Fatores::default();
+        fat.excentricidade_redistribuicao = true;
+        let tangente = |m: &mut MuroGravidade| {
+            m.fundacao.criterio_atrito = crate::solo::CriterioAtrito::TangenteReduzida;
+            m.fundacao.frac_delta_base = 0.67;
+        };
+        let pratico = base_minima_1m(&fat, tangente);
+        eprintln!("muro 1 m, q = 20 kPa: base mínima padrão = {padrao:.2} m ; critérios Marchetti = {pratico:.2} m");
+        assert!(pratico < padrao, "padrão {padrao} ; prático {pratico}");
     }
 
     #[test]

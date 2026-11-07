@@ -158,6 +158,15 @@ impl MuroFlexao {
         let fundacao = self.fundacao.com_na(self.aterro.na().map(|n| n - hv));
         let mut f = base.clone();
         f.extend(est.forcas.iter().cloned());
+        let q_talao = self.cargas.q_uniforme * (b - x_bt);
+        if fat.sobrecarga_talao_estabilizante && q_talao > 0.0 {
+            // Marchetti 4.2: q sobre o talão somada às forças verticais resistentes
+            r.norma(normas::MARCHETTI_SOBRECARGA);
+            f.push(Forca::nova("Sobrecarga q sobre o talão", 0.0, q_talao, (x_bt + b) / 2.0, hv));
+            r.aviso(
+                "Sobrecarga sobre o talão considerada estabilizante (Marchetti 4.2): ação variável favorável — confirme que ela atua sempre junto com o empuxo que provoca.",
+            );
+        }
         let lim = LimitesFs::estatico(fat);
         let mut cargas_perm = self.cargas.clone();
         cargas_perm.q_uniforme = 0.0;

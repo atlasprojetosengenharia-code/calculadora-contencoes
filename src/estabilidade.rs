@@ -35,6 +35,8 @@ pub struct LimitesFs {
     pub area_comprimida: f64,
     /// Terço central verificado só com as ações permanentes (sem sobrecarga).
     pub terco_permanente: bool,
+    /// e > B/6 aceito com redistribuição sem tração (Marchetti 3.3).
+    pub redistribuicao: bool,
 }
 
 impl LimitesFs {
@@ -46,6 +48,7 @@ impl LimitesFs {
             excentricidade: f.excentricidade_max,
             area_comprimida: f.area_comprimida_min,
             terco_permanente: f.terco_central_permanente,
+            redistribuicao: f.excentricidade_redistribuicao,
         }
     }
     pub fn sismico(f: &crate::fatores::Fatores) -> Self {
@@ -56,6 +59,7 @@ impl LimitesFs {
             excentricidade: f.excentricidade_max,
             area_comprimida: f.area_comprimida_min,
             terco_permanente: f.terco_central_permanente,
+            redistribuicao: f.excentricidade_redistribuicao,
         }
     }
 }
@@ -189,8 +193,9 @@ pub fn analisar(
     res.verif(Verificacao::min(format!("FS tombamento — NBR 11682 Tab. 4 ({caso})"), fs_t, lim.tombamento, ""));
 
     // Deslizamento
-    let tan_db = (rad(fund.phi) * fund.frac_delta_base).tan();
+    let tan_db = fund.coef_atrito();
     let ca = fund.c * fund.frac_adesao;
+    let tangente = fund.criterio_atrito == crate::solo::CriterioAtrito::TangenteReduzida;
     let r = n.max(0.0) * tan_db + ca * b + r_pas;
     let fs_d = if t > 0.0 { r / t } else { f64::INFINITY };
     res.linha(format!(
@@ -198,9 +203,16 @@ pub fn analisar(
         fmt(n), fmt(tan_db), fmt(ca), fmt(r_pas), fmt(r), fmt(t)
     ));
     res.norma(normas::NBR11682_DESLIZAMENTO);
+    if tangente {
+        res.norma(normas::MARCHETTI_DESLIZAMENTO);
+    }
     res.formula(
         format!("Deslizamento na base ({caso})"),
-        "FS = (N·tan δb + ca·B + Ep) / ΣH ;  δb = k·φ ;  ca = k·c",
+        if tangente {
+            "FS = (N·f + c'·B + Ep) / ΣH ;  f = k·tg φ ;  c' = k·c"
+        } else {
+            "FS = (N·tan δb + ca·B + Ep) / ΣH ;  δb = k·φ ;  ca = k·c"
+        },
         format!(
             "FS = ({}·{} + {}·{} + {}) / {}",
             fmt(n.max(0.0)), fmt(tan_db), fmt(ca), fmt(b), fmt(r_pas), fmt(t)
@@ -233,16 +245,32 @@ pub fn analisar(
                     "Terço central verificado só com as ações permanentes: exceção à NBR 11682 7.3.3.1 (\"casos contrários devem ser justificados\") — registre a justificativa no projeto.",
                 );
             }
-            res.verif(Verificacao::max(
-                format!("Excentricidade |e| — terço central, {rotulo} ({caso})"),
-                ep.abs(),
-                lim.excentricidade * b,
-                "m",
-            ));
+            if lim.redistribuicao {
+                // Marchetti 3.3: base não resistente à tração — e > B/6 não é
+                // falha; governam a área comprimida e a tensão máxima.
+                res.verif(Verificacao::info(format!("Excentricidade |e| — {rotulo}, redistribuição sem tração ({caso})"), ep.abs(), "m"));
+                if ep.abs() > lim.excentricidade * b + 1e-9 {
+                    res.aviso(format!(
+                        "{caso}: e = {} m > B/6 = {} m aceito com redistribuição sem tração (Marchetti 3.3) — exceção à NBR 11682 7.3.3.1, registre a justificativa no projeto.",
+                        fmt(ep.abs()),
+                        fmt(b / 6.0)
+                    ));
+                }
+            } else {
+                res.verif(Verificacao::max(
+                    format!("Excentricidade |e| — terço central, {rotulo} ({caso})"),
+                    ep.abs(),
+                    lim.excentricidade * b,
+                    "m",
+                ));
+            }
         }
         None => res.linha("Terço central: verificado no caso estático com as ações permanentes."),
     }
     res.norma(normas::NBR6122_AREA_COMPRIMIDA);
+    if e.abs() > b / 6.0 {
+        res.norma(normas::MARCHETTI_TENSOES);
+    }
     res.formula(
         format!("Tensões na base ({caso})"),
         "σ = (N/B)·(1 ± 6e/B)  se |e| ≤ B/6 ;  σmáx = 2N / (3·x_R)  se |e| > B/6",
@@ -300,4 +328,60 @@ pub fn analisar(
     );
     res.verif(Verificacao::min(format!("FS capacidade de carga — NBR 11682 Tab. 4 / NBR 6122 ({caso})"), fs_c, lim.capacidade, ""));
     dist
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::solo::{CriterioAtrito, SoloFundacao};
+
+    /// Marchetti, Muros de Arrimo, 4.1: muro de gravidade H = 6,70 m, B = 3,05 m,
+    /// Rankine β = 10°, φ = 32° (Ka = 0,321), base φ = 36°.
+    fn forcas_exemplo_4_1() -> Vec<Forca> {
+        // pesos e braços em relação à ponta (tabela da p. 54)
+        vec![
+            Forca::nova("1", 0.0, 30.62, 0.74, 0.0),
+            Forca::nova("2", 0.0, 57.42, 1.125, 0.0),
+            Forca::nova("3", 0.0, 98.99, 1.86, 0.0),
+            Forca::nova("4 (solo)", 0.0, 101.16, 2.38, 0.0),
+            Forca::nova("5 (base)", 0.0, 60.40, 1.525, 0.0),
+            // Ea = ½·18·7²·0,321 = 141,56 → Eh = 139,40 a H'/3 ; Ev = 24,58 a 2,52 m
+            Forca::nova("Ev", 0.0, 24.58, 2.52, 0.0),
+            Forca::nova("Eh", 139.40, 0.0, 0.0, 7.0 / 3.0),
+        ]
+    }
+
+    #[test]
+    fn exemplo_gravidade_marchetti() {
+        let mut fund = SoloFundacao { phi: 36.0, c: 0.0, ..Default::default() };
+        fund.criterio_atrito = CriterioAtrito::TangenteReduzida;
+        fund.frac_delta_base = 0.9;
+        let mut lim = LimitesFs::estatico(&crate::fatores::Fatores::default());
+        let f = forcas_exemplo_4_1();
+        let v = |r: &Resultado, nome: &str| r.verificacoes.iter().find(|v| v.nome.starts_with(nome)).unwrap().clone();
+
+        // critério da NBR 11682 (padrão): e > B/6 reprova
+        let mut r = Resultado::default();
+        let d = analisar(&mut r, "estático", &f, None, 3.05, &fund, 1.2, &lim);
+        // livro: FR/Eh = 373,17·0,9·tg 36° / 139,40 = 1,74
+        assert!((v(&r, "FS deslizamento").valor - 1.75).abs() < 0.01, "{}", v(&r, "FS deslizamento").valor);
+        // livro: Mo = 228,19 → e = 0,611 m ; c = 0,914 m ; σ1 = 0,6665·373,17/0,914 = 272,12 kPa
+        assert!((d.e - 0.611).abs() < 0.002, "e = {}", d.e);
+        assert!((d.qmax() - 272.1).abs() < 0.5, "σmáx = {}", d.qmax());
+        assert!(!v(&r, "Excentricidade").ok());
+
+        // critério prático (Marchetti 3.3): e > B/6 aceito, área comprimida 3c/B = 0,90 ≥ 2/3
+        lim.redistribuicao = true;
+        let mut r = Resultado::default();
+        analisar(&mut r, "estático", &f, None, 3.05, &fund, 1.2, &lim);
+        assert!(v(&r, "Excentricidade").ok());
+        assert!((v(&r, "Área comprimida").valor - 0.899).abs() < 0.002);
+        assert!(r.avisos.iter().any(|a| a.contains("Marchetti 3.3")));
+
+        // f = 0,67·tg φ → FS = 1,31 (livro)
+        fund.frac_delta_base = 0.67;
+        let mut r = Resultado::default();
+        analisar(&mut r, "estático", &f, None, 3.05, &fund, 1.2, &lim);
+        assert!((v(&r, "FS deslizamento").valor - 1.30).abs() < 0.01, "{}", v(&r, "FS deslizamento").valor);
+    }
 }

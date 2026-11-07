@@ -241,3 +241,30 @@ pub const NBR16920_PARAMENTO: RefNorma = r(
     "Paramento de concreto com função estrutural dimensionado pela ABNT NBR 6118, verificando punção, \
      cisalhamento e flexão; para tela metálica estrutural, FS global mínimo de 1,5 na conexão grampo-placa-tela.",
 );
+
+// --- Marchetti, O. Muros de Arrimo. São Paulo: Blucher, 2007 (referência técnica, não ABNT) ---
+
+pub const MARCHETTI_DESLIZAMENTO: RefNorma = r(
+    "Marchetti — Muros de Arrimo (2007)",
+    "3.1",
+    "Fr = (Ps + Pc + Ev)·f + c'·B + Ep, com f = 0,67·tg φ a tg φ (exemplos com 0,9·tg φ) e c' = 0,5c a 0,67c; \
+     FS ≥ 1,5 (solo não coesivo) ou 2,0 (coesivo). Recomenda adotar Ep = 0, pois o solo à frente pode ser erodido.",
+);
+pub const MARCHETTI_TENSOES: RefNorma = r(
+    "Marchetti — Muros de Arrimo (2007)",
+    "3.3",
+    "σ = V/B ± 6·Mo/B². Se σ2 < 0, calcula-se a tensão máxima com material não resistente à tração: \
+     e = Mo/V, c = B/2 − e, σ1 = m1·N/c (m1 = 0,6665 para c/B ≤ 0,35 → σ1 = 2N/3c).",
+);
+pub const MARCHETTI_CICLOPICO: RefNorma = r(
+    "Marchetti — Muros de Arrimo (2007)",
+    "2.1 c",
+    "Concreto ciclópico (concreto simples), γc = 1,4·1,2 = 1,68: σcRd = 0,85·fcd ; σctRd = 0,85·fctd ; \
+     τRd = 0,3·fctd ; τwd = 1,5·Vsd/(b·h) ≤ τRd (distribuição parabólica do cisalhamento na seção).",
+);
+pub const MARCHETTI_SOBRECARGA: RefNorma = r(
+    "Marchetti — Muros de Arrimo (2007)",
+    "4.2",
+    "No exemplo do muro de flexão, a carga distribuída sobre o talão é somada às forças verticais resistentes \
+     (deslizamento e tombamento), além de gerar o empuxo Ka·q no tardoz.",
+);
