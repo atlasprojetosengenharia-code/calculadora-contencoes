@@ -352,12 +352,17 @@ pub fn gerar() -> Vec<u8> {
 
     // 2) capa
     let mut capa = Pagina::default();
-    capa.retangulo(0.0, ALTURA - 300.0, LARGURA, 300.0, AZUL);
-    capa.texto(MARGEM, ALTURA - 120.0, 14.0, true, BRANCO, "MANUAL DO USUÁRIO");
-    capa.texto(MARGEM, ALTURA - 165.0, 32.0, true, BRANCO, sobre::NOME);
-    capa.texto(MARGEM, ALTURA - 192.0, 14.0, false, BRANCO, sobre::SUBTITULO);
-    capa.texto(MARGEM, ALTURA - 250.0, 11.0, false, BRANCO, &format!("Versão {versao}"));
-    let mut y = ALTURA - 360.0;
+    let logo = crate::marca::logotipo();
+    let simbolo = crate::marca::simbolo();
+    capa.retangulo(0.0, ALTURA - 420.0, LARGURA, 420.0, AZUL);
+    let lh = 120.0;
+    let lw = lh * logo.largura as f64 / logo.altura as f64;
+    capa.imagem("Logo", MARGEM, ALTURA - 60.0 - lh, lw, lh);
+    capa.texto(MARGEM, ALTURA - 250.0, 13.0, true, BRANCO, "MANUAL DO USUÁRIO");
+    capa.texto(MARGEM, ALTURA - 292.0, 30.0, true, BRANCO, sobre::NOME);
+    capa.texto(MARGEM, ALTURA - 318.0, 14.0, false, BRANCO, sobre::SUBTITULO);
+    capa.texto(MARGEM, ALTURA - 380.0, 11.0, false, BRANCO, &format!("Versão {versao}"));
+    let mut y = ALTURA - 470.0;
     for (t, negrito) in [
         ("Tutorial de uso: sondagem SPT, geometria, verificações de estabilidade,", false),
         ("detalhamento das armaduras e exportação para CAD.", false),
@@ -395,14 +400,21 @@ pub fn gerar() -> Vec<u8> {
     paginas.extend(corpo);
     for (i, p) in paginas.iter_mut().enumerate().skip(1) {
         let yc = ALTURA - 44.0;
-        p.texto(MARGEM, yc, 8.5, false, CINZA, &format!("{} — Manual do usuário", sobre::NOME));
+        let sh = 16.0;
+        p.imagem("Simbolo", MARGEM, yc - 3.0, sh * simbolo.largura as f64 / simbolo.altura as f64, sh);
+        p.texto(MARGEM + 28.0, yc, 8.5, false, CINZA, &format!("{} — Manual do usuário", sobre::NOME));
         p.texto_direita(LARGURA - MARGEM, yc, 8.5, false, CINZA, &format!("v{versao}"));
         p.linha(MARGEM, yc - 6.0, LARGURA - MARGEM, yc - 6.0, 0.5, CINZA);
         p.linha(MARGEM, 48.0, LARGURA - MARGEM, 48.0, 0.5, CINZA);
         p.texto(MARGEM, 34.0, 8.0, false, CINZA, &format!("{} · {}", sobre::copyright(), sobre::site_curto()));
         p.texto_direita(LARGURA - MARGEM, 34.0, 8.5, false, CINZA, &format!("{} / {total}", i + 1));
     }
-    pdf::montar(&paginas, &format!("{} — Manual do usuário", sobre::NOME), &format!("{} — {}", sobre::CRIADOR, sobre::EMPRESA))
+    let claro = Cor(crate::marca::CLARO[0] as f64 / 255.0, crate::marca::CLARO[1] as f64 / 255.0, crate::marca::CLARO[2] as f64 / 255.0);
+    let imagens = [
+        pdf::Imagem { nome: "Logo", largura: logo.largura, altura: logo.altura, alfa: logo.alfa, cor: claro },
+        pdf::Imagem { nome: "Simbolo", largura: simbolo.largura, altura: simbolo.altura, alfa: simbolo.alfa, cor: AZUL },
+    ];
+    pdf::montar(&paginas, &imagens, &format!("{} — Manual do usuário", sobre::NOME), &format!("{} — {}", sobre::CRIADOR, sobre::EMPRESA))
 }
 
 /// Grava o manual na pasta temporária e o abre no leitor de PDF padrão.

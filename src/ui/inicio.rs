@@ -1,7 +1,7 @@
 //! Tela de abertura: apresentação, versão, autoria e direitos autorais.
 
 use super::tema;
-use super::widgets::{botao_primario, botao_secundario, cartao, pintar_logo};
+use super::widgets::{botao_primario, botao_secundario, cartao};
 use crate::sobre;
 use eframe::egui::{self, RichText, Stroke};
 
@@ -55,9 +55,8 @@ pub fn mostrar(ctx: &egui::Context, sessao_anterior: Option<&str>, atualizacao: 
 
         ui.vertical_centered(|ui| {
             ui.add_space((ui.available_height() * 0.10).max(20.0));
-            let (lr, _) = ui.allocate_exact_size(egui::vec2(116.0, 116.0), egui::Sense::hover());
-            pintar_logo(ui.painter(), lr, &p);
-            ui.add_space(18.0);
+            crate::marca::mostrar(ui, crate::marca::Peca::Logotipo, 150.0);
+            ui.add_space(20.0);
             ui.label(RichText::new(sobre::NOME).font(tema::fonte_forte(38.0)).color(p.texto));
             ui.label(RichText::new(sobre::SUBTITULO).size(18.0).color(p.fraco));
             ui.add_space(8.0);

@@ -25,14 +25,15 @@ pub fn paleta(escuro: bool) -> Paleta {
     let c = Color32::from_rgb;
     if escuro {
         Paleta {
-            fundo: c(13, 17, 23),
-            painel: c(20, 25, 32),
-            cartao: c(26, 32, 41),
-            borda: c(44, 52, 64),
-            texto: c(230, 237, 243),
-            fraco: c(139, 148, 158),
-            destaque: c(56, 139, 253),
-            destaque_suave: c(28, 52, 86),
+            // tons do azul-marinho institucional (#13253E)
+            fundo: c(11, 16, 25),
+            painel: c(16, 23, 35),
+            cartao: c(22, 31, 46),
+            borda: c(42, 53, 71),
+            texto: c(232, 232, 232),
+            fraco: c(143, 150, 160),
+            destaque: c(92, 128, 178),
+            destaque_suave: c(30, 44, 66),
             ok: c(63, 185, 80),
             falha: c(248, 81, 73),
             alerta: c(214, 158, 46),
@@ -40,14 +41,15 @@ pub fn paleta(escuro: bool) -> Paleta {
         }
     } else {
         Paleta {
-            fundo: c(242, 244, 247),
+            // azul-marinho (#13253E), grafite (#4F5559) e cinza-claro (#E8E8E8)
+            fundo: c(240, 242, 245),
             painel: c(255, 255, 255),
             cartao: c(255, 255, 255),
-            borda: c(214, 220, 227),
-            texto: c(31, 35, 40),
-            fraco: c(101, 109, 118),
-            destaque: c(9, 105, 218),
-            destaque_suave: c(221, 234, 252),
+            borda: c(214, 218, 224),
+            texto: c(19, 37, 62),
+            fraco: c(79, 85, 89),
+            destaque: c(19, 37, 62),
+            destaque_suave: c(222, 228, 237),
             ok: c(26, 127, 55),
             falha: c(207, 34, 46),
             alerta: c(154, 103, 0),

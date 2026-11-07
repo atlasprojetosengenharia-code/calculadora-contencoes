@@ -1,7 +1,7 @@
 //! Componentes reutilizáveis: cartões, campos numéricos, botões e logotipo.
 
-use super::tema::{self, Paleta};
-use eframe::egui::{self, Color32, Pos2, Rect, RichText, Sense, Shape, Stroke};
+use super::tema;
+use eframe::egui::{self, Color32, Pos2, RichText, Sense, Stroke};
 use std::ops::RangeInclusive;
 
 /// Cartão com fundo, borda e cantos arredondados.
@@ -84,29 +84,8 @@ pub fn chip(ui: &mut egui::Ui, texto: &str, cor: Color32) {
         });
 }
 
-/// Logotipo vetorial: muro de contenção com empuxo.
-pub fn pintar_logo(pt: &egui::Painter, r: Rect, p: &Paleta) {
-    pt.rect_filled(r, r.width() * 0.22, p.destaque);
-    let m = |x: f32, y: f32| Pos2::new(r.left() + x * r.width(), r.top() + y * r.height());
-    let branco = Color32::WHITE;
-    let solo = Color32::from_rgba_unmultiplied(255, 255, 255, 70);
-    pt.add(Shape::convex_polygon(vec![m(0.56, 0.30), m(0.86, 0.30), m(0.86, 0.78), m(0.60, 0.78)], solo, Stroke::NONE));
-    pt.add(Shape::convex_polygon(vec![m(0.16, 0.78), m(0.60, 0.78), m(0.56, 0.24), m(0.42, 0.24)], branco, Stroke::NONE));
-    pt.line_segment([m(0.10, 0.78), m(0.90, 0.78)], Stroke::new(r.width() * 0.035, branco));
-    for (i, y) in [0.42, 0.54, 0.66].into_iter().enumerate() {
-        let len = 0.10 + 0.04 * i as f32;
-        let a = m(0.86 - 0.02, y);
-        let b = m(0.86 - 0.02 - len, y);
-        pt.line_segment([a, b], Stroke::new(r.width() * 0.025, branco));
-        pt.line_segment([b, m(0.86 - 0.02 - len + 0.04, y - 0.035)], Stroke::new(r.width() * 0.025, branco));
-        pt.line_segment([b, m(0.86 - 0.02 - len + 0.04, y + 0.035)], Stroke::new(r.width() * 0.025, branco));
-    }
-}
-
 pub fn logo(ui: &mut egui::Ui, tam: f32) {
-    let p = tema::de(ui);
-    let (r, _) = ui.allocate_exact_size(egui::vec2(tam, tam), Sense::hover());
-    pintar_logo(ui.painter(), r, &p);
+    crate::marca::mostrar(ui, crate::marca::Peca::Simbolo, tam);
 }
 
 /// Croqui de referência do muro de gravidade (letras A–F e H).

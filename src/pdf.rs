@@ -152,7 +152,8 @@ pub struct Cor(pub f64, pub f64, pub f64);
 
 pub const PRETO: Cor = Cor(0.10, 0.12, 0.16);
 pub const CINZA: Cor = Cor(0.42, 0.45, 0.50);
-pub const AZUL: Cor = Cor(0.09, 0.32, 0.62);
+/// Azul-marinho institucional Atlas (#13253E).
+pub const AZUL: Cor = Cor(19.0 / 255.0, 37.0 / 255.0, 62.0 / 255.0);
 pub const CLARO: Cor = Cor(0.93, 0.95, 0.98);
 pub const BRANCO: Cor = Cor(1.0, 1.0, 1.0);
 
@@ -195,8 +196,56 @@ impl Pagina {
     }
 }
 
+/// Imagem de uma cor com máscara de opacidade (logotipos da marca).
+pub struct Imagem<'a> {
+    /// Nome do recurso usado em `Pagina::imagem` (ex.: "Logo").
+    pub nome: &'static str,
+    pub largura: usize,
+    pub altura: usize,
+    pub alfa: &'a [u8],
+    pub cor: Cor,
+}
+
+/// Compressão RunLength (filtro /RunLengthDecode do PDF).
+fn run_length(dados: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(dados.len() / 4);
+    let mut i = 0;
+    while i < dados.len() {
+        // repetição
+        let mut r = 1;
+        while i + r < dados.len() && dados[i + r] == dados[i] && r < 128 {
+            r += 1;
+        }
+        if r >= 2 {
+            out.push((257 - r) as u8);
+            out.push(dados[i]);
+            i += r;
+            continue;
+        }
+        // trecho literal até a próxima repetição
+        let ini = i;
+        while i < dados.len() && i - ini < 128 && !(i + 1 < dados.len() && dados[i + 1] == dados[i]) {
+            i += 1;
+        }
+        if i == ini {
+            i += 1;
+        }
+        out.push((i - ini - 1) as u8);
+        out.extend_from_slice(&dados[ini..i]);
+    }
+    out.push(128);
+    out
+}
+
+impl Pagina {
+    /// Desenha a imagem `nome` com o canto inferior esquerdo em (x, y).
+    pub fn imagem(&mut self, nome: &str, x: f64, y: f64, w: f64, h: f64) {
+        self.op(&format!("q {w:.2} 0 0 {h:.2} {x:.2} {y:.2} cm /{nome} Do Q"));
+    }
+}
+
 /// Monta o arquivo PDF a partir das páginas.
-pub fn montar(paginas: &[Pagina], titulo: &str, autor: &str) -> Vec<u8> {
+pub fn montar(paginas: &[Pagina], imagens: &[Imagem], titulo: &str, autor: &str) -> Vec<u8> {
     let mut out: Vec<u8> = b"%PDF-1.4\n%\xE2\xE3\xCF\xD3\n".to_vec();
     let mut offsets: Vec<usize> = Vec::new();
     let n = paginas.len();
@@ -206,9 +255,17 @@ pub fn montar(paginas: &[Pagina], titulo: &str, autor: &str) -> Vec<u8> {
         out.extend_from_slice(corpo);
         out.extend_from_slice(b"\nendobj\n");
     };
-    // 1 catálogo, 2 árvore de páginas, 3 e 4 fontes, 5 info; depois (página, conteúdo) por página
+    let fluxo = |dic: String, dados: &[u8]| -> Vec<u8> {
+        let mut v = format!("{dic}\nstream\n").into_bytes();
+        v.extend_from_slice(dados);
+        v.extend_from_slice(b"\nendstream");
+        v
+    };
+    // 1 catálogo, 2 árvore de páginas, 3 e 4 fontes, 5 info, depois (imagem, máscara)
+    // por imagem e (página, conteúdo) por página
+    let primeira_pagina = 6 + 2 * imagens.len();
     obj(&mut out, &mut offsets, b"<< /Type /Catalog /Pages 2 0 R >>");
-    let kids: String = (0..n).map(|i| format!("{} 0 R ", 6 + 2 * i)).collect();
+    let kids: String = (0..n).map(|i| format!("{} 0 R ", primeira_pagina + 2 * i)).collect();
     obj(&mut out, &mut offsets, format!("<< /Type /Pages /Kids [{kids}] /Count {n} >>").as_bytes());
     obj(&mut out, &mut offsets, b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>");
     obj(&mut out, &mut offsets, b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>");
@@ -220,21 +277,40 @@ pub fn montar(paginas: &[Pagina], titulo: &str, autor: &str) -> Vec<u8> {
     info.extend(literal(crate::sobre::NOME));
     info.extend_from_slice(b" >>");
     obj(&mut out, &mut offsets, &info);
+    let mut xobjetos = String::new();
+    for (k, im) in imagens.iter().enumerate() {
+        let id = 6 + 2 * k;
+        let _ = write!(xobjetos, "/{} {id} 0 R ", im.nome);
+        // base 1×1 na cor; a máscara (outra resolução, permitido pelo PDF 1.4) dá a forma
+        let rgb = [im.cor.0, im.cor.1, im.cor.2].map(|c| (c * 255.0).round() as u8);
+        let dic = format!(
+            "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB \
+             /BitsPerComponent 8 /SMask {} 0 R /Length 3 >>",
+            id + 1
+        );
+        obj(&mut out, &mut offsets, &fluxo(dic, &rgb));
+        let rl = run_length(im.alfa);
+        let dic = format!(
+            "<< /Type /XObject /Subtype /Image /Width {} /Height {} /ColorSpace /DeviceGray \
+             /BitsPerComponent 8 /Filter /RunLengthDecode /Length {} >>",
+            im.largura,
+            im.altura,
+            rl.len()
+        );
+        obj(&mut out, &mut offsets, &fluxo(dic, &rl));
+    }
     for (i, p) in paginas.iter().enumerate() {
         obj(
             &mut out,
             &mut offsets,
             format!(
                 "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {LARGURA} {ALTURA}] \
-                 /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents {} 0 R >>",
-                7 + 2 * i
+                 /Resources << /Font << /F1 3 0 R /F2 4 0 R >> /XObject << {xobjetos}>> >> /Contents {} 0 R >>",
+                primeira_pagina + 1 + 2 * i
             )
             .as_bytes(),
         );
-        let mut corpo = format!("<< /Length {} >>\nstream\n", p.conteudo.len()).into_bytes();
-        corpo.extend_from_slice(&p.conteudo);
-        corpo.extend_from_slice(b"\nendstream");
-        obj(&mut out, &mut offsets, &corpo);
+        obj(&mut out, &mut offsets, &fluxo(format!("<< /Length {} >>", p.conteudo.len()), &p.conteudo));
     }
     let xref = out.len();
     let mut x = String::new();
@@ -256,7 +332,7 @@ mod tests {
     fn pdf_valido_com_acentos() {
         let mut p = Pagina::default();
         p.texto(50.0, 800.0, 12.0, false, PRETO, "Contenção (σ ≥ 2) \\ teste");
-        let b = montar(&[p], "Título", "Autor");
+        let b = montar(&[p], &[], "Título", "Autor");
         assert!(b.starts_with(b"%PDF-1.4"));
         assert!(b.ends_with(b"%%EOF\n"));
         // "ç" e "ã" como bytes Windows-1252; σ e ≥ trocados; parênteses e \ escapados
@@ -274,5 +350,35 @@ mod tests {
             assert!(b[off..].starts_with(format!("{} 0 obj", k + 1).as_bytes()), "objeto {}", k + 1);
         }
         assert_eq!(quebrar("a b c", 10.0, false, 1.0).len(), 3);
+    }
+
+    /// Decodificador de referência do /RunLengthDecode.
+    fn decodificar(rl: &[u8]) -> Vec<u8> {
+        let (mut out, mut i) = (Vec::new(), 0);
+        while i < rl.len() && rl[i] != 128 {
+            let n = rl[i] as usize;
+            if n < 128 {
+                out.extend_from_slice(&rl[i + 1..i + 2 + n]);
+                i += n + 2;
+            } else {
+                out.extend(std::iter::repeat(rl[i + 1]).take(257 - n));
+                i += 2;
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn run_length_ida_e_volta() {
+        let mut dados = vec![0u8; 1000];
+        dados.extend((0..300).map(|i| (i * 7 % 251) as u8));
+        dados.extend(vec![255u8; 129]);
+        dados.push(3);
+        let rl = run_length(&dados);
+        assert_eq!(decodificar(&rl), dados);
+        let m = crate::marca::logotipo();
+        let rl = run_length(m.alfa);
+        assert_eq!(decodificar(&rl), m.alfa);
+        assert!(rl.len() < m.alfa.len() / 2, "compressão {} de {}", rl.len(), m.alfa.len());
     }
 }
