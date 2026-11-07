@@ -38,9 +38,9 @@ pub const NBR11682_CAPACIDADE: RefNorma = r(
 );
 pub const NBR11682_TERCO_CENTRAL: RefNorma = r(
     "ABNT NBR 11682:2009",
-    "7.3.3.1",
-    "A resultante das ações na base do muro deve ficar no terço central (excentricidade e ≤ B/6), garantindo \
-     a base inteiramente comprimida.",
+    "7.3.3.1 e 7.3.3.2",
+    "Muros de gravidade e de flexão: a linha de ação da resultante dos esforços envolvidos deve interceptar o \
+     terço central da base (e ≤ B/6); casos contrários devem ser justificados.",
 );
 pub const NBR11682_SOBRECARGA: RefNorma = r(
     "ABNT NBR 11682:2009",
@@ -59,14 +59,15 @@ pub const NBR6122_FS_GLOBAL: RefNorma = r(
 pub const NBR6122_AREA_COMPRIMIDA: RefNorma = r(
     "ABNT NBR 6122:2019",
     "7.6.2",
-    "Fundações rasas sob carga excêntrica: a área comprimida da base deve ser de no mínimo 2/3 da área total, \
-     para as ações características.",
+    "Fundação rasa sob carga excêntrica, solo sem resistência à tração: área comprimida de no mínimo 2/3 da \
+     área total com as solicitações características (ou 50 % com as de cálculo), e tensão máxima de borda \
+     atendendo à Seção 6.",
 );
 pub const NBR6122_PASSIVO: RefNorma = r(
     "ABNT NBR 6122:2019",
     "7.6.3",
-    "O empuxo passivo à frente da fundação só pode ser considerado se garantida a permanência do solo, \
-     reduzido por fator de no mínimo 2,0.",
+    "Além do atrito solo-fundação, pode-se contar com o empuxo passivo, desde que o solo não possa ser removido \
+     durante a vida útil; o valor calculado deve ser reduzido por coeficiente de no mínimo 2,0.",
 );
 
 // --- ABNT NBR 5629:2018 — Tirantes ancorados no terreno ---------------------
@@ -179,4 +180,64 @@ pub const NBR16920_DRENAGEM: RefNorma = r(
     "ABNT NBR 16920-2:2021",
     "9.7.1 e Seção 12",
     "Contenções sem drenagem interna eficiente devem considerar a pressão d'água no dimensionamento.",
+);
+
+// --- Alvenarias (muro de gravidade) ----------------------------------------
+
+pub const NBR6118_CONCRETO_SIMPLES: RefNorma = r(
+    "ABNT NBR 6118:2023",
+    "24.3, 24.4 e 24.5.2",
+    "Concreto simples estrutural C15 a C40; γc = 1,2 × 1,4 = 1,68; σcRd = 0,85·fcd ; σctRd = 0,85·fctd ;      τwRd = 0,30·fctd na flexão simples e 0,30·fctd·(1 + 3·σcmd/fck) na flexo-compressão, com o fator ≤ 2.      Juntas de dilatação pelo menos a cada 15 m.",
+);
+pub const NBR16868_JUNTAS: RefNorma = r(
+    "ABNT NBR 16868-1:2020",
+    "Tabelas 2 e 4 (por analogia)",
+    "Resistência característica ao cisalhamento em juntas horizontais fvk = f0 + 0,5·σ (f0 = 0,10 / 0,15 / 0,35 MPa      conforme a argamassa; σ = 0,9 × compressão permanente), com γm = 2,0. A norma trata de blocos e tijolos: para      pedra argamassada, uso por analogia.",
+);
+pub const MACCAFERRI_GABIAO: RefNorma = r(
+    "Manual técnico Maccaferri",
+    "Muros de gabiões",
+    "Tensão admissível à compressão σadm = 50·γg − 30 (tf/m²) e ângulo de atrito entre camadas φ* = 25·γg − 10 (°),      com γg em tf/m³; o gabião não resiste à tração. Referência técnica, não norma ABNT.",
+);
+
+// --- Detalhamento do aço ------------------------------------------------------
+
+pub const NBR6118_ANCORAGEM: RefNorma = r(
+    "ABNT NBR 6118:2023",
+    "9.4.2 e 9.5.2",
+    "Ancoragem por aderência: lb = (Ø/4)·(fyd/fbd) ≥ 25Ø, fbd = η1·η2·η3·fctd (η1 = 2,25 barras nervuradas;      η2 = 1,0 boa aderência / 0,7 má aderência); lb,nec = α·lb·As,calc/As,ef ≥ lb,mín. Traspasse de barras      tracionadas l0t = α0t·lb,nec.",
+);
+pub const NBR6118_DISTRIBUICAO: RefNorma = r(
+    "ABNT NBR 6118:2023",
+    "Tabela 19.1 e 20.1",
+    "Armadura secundária (distribuição) ≥ 20 % da principal, ≥ 0,9 cm²/m e ≥ 0,5·ρmín. Espaçamento da      armadura principal ≤ 2h e ≤ 20 cm; da secundária ≤ 33 cm.",
+);
+
+// --- Detalhamento por tipo de contenção --------------------------------------
+
+pub const NBR5629_INICIO_BULBO: RefNorma = r(
+    "ABNT NBR 5629:2018",
+    "5.5.1 a)",
+    "Em nenhum caso o início do bulbo deve distar menos de 3,0 m da superfície do terreno de início da perfuração \
+     ou da face interna do paramento.",
+);
+pub const NBR6118_PILAR_DET: RefNorma = r(
+    "ABNT NBR 6118:2023",
+    "18.4.2 e 18.4.3",
+    "Barras longitudinais com Ø ≥ 10 mm e ≤ 1/8 da menor dimensão; seção circular com no mínimo 6 barras; \
+     espaçamento entre eixos ≤ 2× a menor dimensão e ≤ 400 mm, livre ≥ 20 mm. Estribos com Ø ≥ 5 mm e ≥ Ø/4, \
+     espaçamento ≤ 200 mm, ≤ menor dimensão e ≤ 12Ø (CA-50).",
+);
+pub const NBR16920_PROTECAO: RefNorma = r(
+    "ABNT NBR 16920-2:2021",
+    "10.2.3 e 10.3",
+    "Armação do grampo com cobrimento de calda ≥ 20 mm (inclusive emendas) e espaçadores a cada 2 m no máximo; \
+     calda de preenchimento com a/c ≤ 0,5 e ≥ 25 MPa. Cabeça protegida até 30 cm para dentro do terreno, com \
+     cobrimento ≥ 30 mm.",
+);
+pub const NBR16920_PARAMENTO: RefNorma = r(
+    "ABNT NBR 16920-2:2021",
+    "9.3",
+    "Paramento de concreto com função estrutural dimensionado pela ABNT NBR 6118, verificando punção, \
+     cisalhamento e flexão; para tela metálica estrutural, FS global mínimo de 1,5 na conexão grampo-placa-tela.",
 );

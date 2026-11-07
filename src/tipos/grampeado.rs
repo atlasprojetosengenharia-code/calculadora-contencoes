@@ -1,6 +1,7 @@
 //! Solo grampeado (NBR 16920-2): estabilidade por cunhas planas passando
 //! pelo pé da escavação, arrancamento e ruptura das barras, e face.
 
+use crate::armadura::{self, Armadura};
 use crate::concreto::{flexao_retangular, Concreto};
 use crate::empuxo::{rad, ParamEmpuxo};
 use crate::fatores::Fatores;
@@ -232,6 +233,7 @@ impl SoloGrampeado {
         }
 
         // Face
+        let mut as_face = 0.0;
         if t_max > 0.0 {
             let c = &self.concreto;
             let smax = self.sh.max(self.sv);
@@ -254,6 +256,7 @@ impl SoloGrampeado {
                 format!("T0 = {} kN ;  p = {} kPa ;  M = {} kN·m/m ;  As = {} cm²/m", fmt(t0), fmt(p), fmt(m), fmt(f.as_calc)),
             );
             r.norma(normas::NBR6118_FLEXAO);
+            as_face = f.as_adotar();
             r.verif(Verificacao::max("Face: x/d", f.x_d, 0.45, ""));
             let dm = d * 1000.0;
             let u = 4.0 * self.placa * 1000.0 + 4.0 * PI * dm;
@@ -277,8 +280,117 @@ impl SoloGrampeado {
         }
         r.aviso("Análise por cunhas planas é simplificada; verificar superfícies circulares/poligonais (NBR 11682) em software específico.");
         r.aviso("qs deve ser confirmado por ensaios de arrancamento (NBR 16920-2).");
+        self.detalhamento(&mut r, &zs, as_face);
         r.desenho = self.desenho(&zs, crit.omega);
+        self.desenhar_tela(&mut r.desenho, &r.armaduras);
         r
+    }
+
+    /// Detalhamento: grampos, proteção, tela soldada e concreto projetado.
+    fn detalhamento(&self, r: &mut Resultado, zs: &[f64], as_face: f64) {
+        let c = &self.concreto;
+        r.titulo("Detalhamento construtivo — solo grampeado");
+        r.norma(normas::NBR16920_PROTECAO);
+        r.norma(normas::NBR16920_PARAMENTO);
+        r.linha(format!(
+            "Grampos: {} linhas ; malha Sh × Sv = {} × {} m ; 1ª linha a {} m do topo ; L = {} m ; furo Ø {} cm ; barra Ø {} mm (fyk {} MPa) ; inclinação {}° abaixo da horizontal",
+            zs.len(),
+            fmt(self.sh),
+            fmt(self.sv),
+            fmt(self.z1),
+            fmt(self.comprimento),
+            fmt(self.diam_furo * 100.0),
+            fmt(self.diam_barra),
+            fmt(self.fyk_barra),
+            fmt(self.incl_grampo)
+        ));
+        r.verif(Verificacao::min("Grampos: inclinação ≥ 10° (critério de projeto)", self.incl_grampo, 10.0, "°"));
+        r.verif(Verificacao::max("Grampos: inclinação ≤ 15° (critério de projeto)", self.incl_grampo, 15.0, "°"));
+        let cob_calda = (self.diam_furo * 1000.0 - self.diam_barra) / 2.0;
+        r.formula(
+            "Cobrimento de calda da barra",
+            "c = (Ø_furo − Ø_barra) / 2 ≥ 20 mm",
+            format!("c = ({} − {}) / 2", fmt(self.diam_furo * 1000.0), fmt(self.diam_barra)),
+            format!("c = {} mm (com espaçadores centralizadores)", fmt(cob_calda)),
+        );
+        r.verif(Verificacao::min("Grampos: cobrimento de calda ≥ 20 mm (NBR 16920-2 10.2.3)", cob_calda, 20.0, "mm"));
+        let n_esp = (self.comprimento / 2.0).ceil().max(1.0);
+        r.linha(format!(
+            "Espaçadores (centralizadores) a cada 2 m no máximo: {} por grampo ; calda com a/c ≤ 0,5 e fck ≥ 25 MPa ; cabeça protegida até 30 cm dentro do terreno com cobrimento ≥ 30 mm.",
+            n_esp as i64
+        ));
+
+        let mut tab = vec![Armadura {
+            pos: "N1".into(),
+            elemento: "Grampo — barra de aço".into(),
+            bitola_mm: self.diam_barra,
+            espac_cm: None,
+            quantidade: format!("1 a cada {} × {} m", fmt(self.sh), fmt(self.sv)),
+            comprimento_m: self.comprimento + 0.15,
+            as_nec: 0.0,
+            as_ef: self.area_barra_mm2() / 100.0,
+            unidade: "cm²",
+            lb_cm: 0.0,
+        }];
+        let e = self.espessura_face;
+        if as_face > 0.0 {
+            match armadura::tela(as_face) {
+                Some((nome, as_t)) => {
+                    tab.push(Armadura {
+                        pos: "N2".into(),
+                        elemento: format!("Paramento — tela soldada {nome} (duas direções)"),
+                        bitola_mm: 0.0,
+                        espac_cm: None,
+                        quantidade: nome.into(),
+                        comprimento_m: 0.0,
+                        as_nec: as_face,
+                        as_ef: as_t,
+                        unidade: "cm²/m",
+                        lb_cm: 0.0,
+                    });
+                    r.formula(
+                        "Tela soldada do paramento",
+                        "Tela série Q com As ≥ As,nec (cada direção)",
+                        format!("As,nec = {} cm²/m", fmt(as_face)),
+                        format!("Tela {nome} ({} cm²/m), posicionada no meio da espessura, com traspasse de 2 malhas", fmt(as_t)),
+                    );
+                }
+                None => {
+                    let (phi, s, as_ef) = armadura::malha_principal(as_face, e);
+                    tab.push(Armadura {
+                        pos: "N2".into(),
+                        elemento: "Paramento — malha de barras (duas direções)".into(),
+                        bitola_mm: phi,
+                        espac_cm: Some(s),
+                        quantidade: format!("{}/m", (100.0 / s).ceil() as i64),
+                        comprimento_m: 0.0,
+                        as_nec: as_face,
+                        as_ef,
+                        unidade: "cm²/m",
+                        lb_cm: armadura::lb_basico(phi, c.fck, c.fyk, 1.4, 1.15, true),
+                    });
+                    r.aviso("Paramento: nenhuma tela Q padronizada atende — adotada malha de barras.");
+                }
+            }
+        }
+        r.linha(format!(
+            "Paramento em concreto projetado C{} com espessura de {} cm, aplicado em camadas, placa de {} × {} m na cabeça de cada grampo.",
+            fmt(c.fck),
+            fmt(e * 100.0),
+            fmt(self.placa),
+            fmt(self.placa)
+        ));
+        r.armaduras.extend(tab);
+    }
+
+    /// Tela do paramento no desenho.
+    fn desenhar_tela(&self, d: &mut Desenho, arm: &[Armadura]) {
+        let x_ft = self.h * rad(self.incl_face).tan();
+        let e = self.espessura_face.max(0.02 * self.h);
+        d.linha(Estilo::Armadura, vec![[-e / 2.0, 0.05], [x_ft - e / 2.0, self.h - 0.05]]);
+        if let Some(a) = arm.iter().find(|a| a.pos == "N2") {
+            d.texto([-0.25 * self.h, 0.75 * self.h], a.descricao());
+        }
     }
 
     fn desenho(&self, zs: &[f64], omega: f64) -> Desenho {

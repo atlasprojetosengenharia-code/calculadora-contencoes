@@ -128,6 +128,10 @@ pub enum Estilo {
     Dreno,
     /// Barbacãs e drenos sub-horizontais.
     Barbaca,
+    /// Barra de armadura (vista longitudinal).
+    Armadura,
+    /// Barra de armadura em seção (ponto).
+    ArmaduraSecao,
 }
 
 /// Polígono CONVEXO em coordenadas do mundo (m), x → direita, y ↑.
@@ -228,6 +232,8 @@ pub struct Resultado {
     pub blocos: Vec<Bloco>,
     pub avisos: Vec<String>,
     pub desenho: Desenho,
+    /// Tabela de armação (detalhamento do aço).
+    pub armaduras: Vec<crate::armadura::Armadura>,
 }
 
 impl Resultado {
@@ -290,6 +296,13 @@ impl Resultado {
                 Bloco::Norma(n) => writeln!(s, "  ▌ {} — {}\n  ▌ {}", n.norma, n.item, n.requisito),
                 Bloco::Verif(i) => writeln!(s, "  {}", self.verificacoes[*i].texto()),
             };
+        }
+        if !self.armaduras.is_empty() {
+            let _ = writeln!(s, "\n== TABELA DE ARMAÇÃO (comprimentos aproximados) ==");
+            let _ = writeln!(s, "  {}", crate::armadura::CABECALHO.join(" | "));
+            for a in &self.armaduras {
+                let _ = writeln!(s, "  {}", a.celulas().join(" | "));
+            }
         }
         let _ = writeln!(s, "\n== RESUMO DAS VERIFICAÇÕES ==");
         for v in &self.verificacoes {

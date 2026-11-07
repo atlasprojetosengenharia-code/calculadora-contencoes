@@ -111,6 +111,22 @@ pub fn gerar(res: &Resultado, titulo: &str, versao: &str) -> String {
     }
     h.push_str("</table></section></div>");
 
+    if !res.armaduras.is_empty() {
+        h.push_str(r#"<section class="cartao"><h3>Detalhamento do aço — tabela de armação</h3><table class="resumo"><tr>"#);
+        for c in crate::armadura::CABECALHO {
+            h.push_str(&format!("<td><b>{}</b></td>", esc(c)));
+        }
+        h.push_str("</tr>");
+        for a in &res.armaduras {
+            h.push_str("<tr>");
+            for c in a.celulas() {
+                h.push_str(&format!("<td>{}</td>", esc(&c)));
+            }
+            h.push_str("</tr>");
+        }
+        h.push_str(r#"</table><p class="txt" style="color:var(--fraco);font-size:12.5px">CA-50 ; comprimentos aproximados — conferir dobras, cobrimentos e emendas no projeto executivo.</p></section>"#);
+    }
+
     if !res.avisos.is_empty() {
         h.push_str(r#"<section class="cartao avisos"><h3>⚠ Avisos</h3><ul>"#);
         for a in &res.avisos {

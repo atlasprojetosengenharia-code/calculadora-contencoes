@@ -1,11 +1,14 @@
 // Oculta a janela de console no executável de release (Windows).
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod alvenaria;
 mod app;
+mod armadura;
 mod atualizacao;
 mod concreto;
 mod desenho;
 mod drenagem;
+mod dxf;
 mod empuxo;
 mod estabilidade;
 mod fatores;

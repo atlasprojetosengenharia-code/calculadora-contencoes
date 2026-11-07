@@ -33,6 +33,8 @@ pub struct LimitesFs {
     pub capacidade: f64,
     pub excentricidade: f64,
     pub area_comprimida: f64,
+    /// Terço central verificado só com as ações permanentes (sem sobrecarga).
+    pub terco_permanente: bool,
 }
 
 impl LimitesFs {
@@ -43,6 +45,7 @@ impl LimitesFs {
             capacidade: f.fs_capacidade_carga,
             excentricidade: f.excentricidade_max,
             area_comprimida: f.area_comprimida_min,
+            terco_permanente: f.terco_central_permanente,
         }
     }
     pub fn sismico(f: &crate::fatores::Fatores) -> Self {
@@ -52,8 +55,16 @@ impl LimitesFs {
             capacidade: f.fs_capacidade_carga_sismo,
             excentricidade: f.excentricidade_max,
             area_comprimida: f.area_comprimida_min,
+            terco_permanente: f.terco_central_permanente,
         }
     }
+}
+
+/// Resultante de um conjunto de forças na base: (N, x_R a partir da ponta).
+pub fn resultante(forcas: &[Forca]) -> (f64, f64) {
+    let n: f64 = forcas.iter().map(|f| f.v).sum();
+    let m: f64 = forcas.iter().map(|f| f.v * f.x - f.h * f.y).sum();
+    (n, if n > 0.0 { m / n } else { 0.0 })
 }
 
 #[derive(Clone, Debug, Default)]
@@ -144,6 +155,7 @@ pub fn analisar(
     res: &mut Resultado,
     caso: &str,
     forcas: &[Forca],
+    forcas_perm: Option<&[Forca]>,
     b: f64,
     fund: &SoloFundacao,
     df: f64,
@@ -202,19 +214,34 @@ pub fn analisar(
     let e = b / 2.0 - x_r;
     let dist = DistribuicaoBase { b, n, x_r, e };
     res.linha(format!("Resultante a x = {} m da ponta ; e = {} m ; B/6 = {} m", fmt(x_r), fmt(e), fmt(b / 6.0)));
-    res.norma(normas::NBR11682_TERCO_CENTRAL);
-    res.formula(
-        format!("Excentricidade da resultante ({caso})"),
-        "x_R = ΣM_ponta / N ;  e = B/2 − x_R  ≤  B/6",
-        format!("x_R = {} / {} = {} m ;  e = {}/2 − {}", fmt(m_liq), fmt(n), fmt(x_r), fmt(b), fmt(x_r)),
-        format!("e = {} m  (B/6 = {} m)", fmt(e), fmt(b / 6.0)),
-    );
-    res.verif(Verificacao::max(
-        format!("Excentricidade |e| — terço central, NBR 11682 ({caso})"),
-        e.abs(),
-        lim.excentricidade * b,
-        "m",
-    ));
+    // Terço central: com as ações permanentes (critério padrão) ou com todas.
+    let conjunto = if lim.terco_permanente { forcas_perm } else { Some(forcas) };
+    match conjunto {
+        Some(fp) => {
+            let (np, xp) = resultante(fp);
+            let ep = b / 2.0 - xp;
+            let rotulo = if lim.terco_permanente { "ações permanentes, sem sobrecarga" } else { "todas as ações" };
+            res.norma(normas::NBR11682_TERCO_CENTRAL);
+            res.formula(
+                format!("Excentricidade da resultante — {rotulo} ({caso})"),
+                "x_R = ΣM_ponta / N ;  e = B/2 − x_R  ≤  B/6",
+                format!("N = {} kN/m ;  x_R = {} m ;  e = {}/2 − {}", fmt(np), fmt(xp), fmt(b), fmt(xp)),
+                format!("e = {} m  (B/6 = {} m)", fmt(ep), fmt(b / 6.0)),
+            );
+            if lim.terco_permanente {
+                res.aviso(
+                    "Terço central verificado só com as ações permanentes: exceção à NBR 11682 7.3.3.1 (\"casos contrários devem ser justificados\") — registre a justificativa no projeto.",
+                );
+            }
+            res.verif(Verificacao::max(
+                format!("Excentricidade |e| — terço central, {rotulo} ({caso})"),
+                ep.abs(),
+                lim.excentricidade * b,
+                "m",
+            ));
+        }
+        None => res.linha("Terço central: verificado no caso estático com as ações permanentes."),
+    }
     res.norma(normas::NBR6122_AREA_COMPRIMIDA);
     res.formula(
         format!("Tensões na base ({caso})"),

@@ -33,9 +33,16 @@ mod fumaca {
             println!("  blocos: {} fórmulas, {} referências normativas", nf, nn);
             assert!(nf >= 3 && nn >= 2, "{nome}: memorial sem fórmulas/normas suficientes");
             // amostras do relatório: MEMORIAL_AMOSTRA=<pasta> cargo test
+            // detalhamento: todo tipo gera tabela de armação e DXF R12 válido
+            assert!(!r.armaduras.is_empty(), "{nome}: sem tabela de armação");
+            assert!(r.blocos.iter().any(|b| matches!(b, Bloco::Titulo(t) if t.starts_with("Detalhamento construtivo"))));
+            let dxf = crate::dxf::gerar(&r.desenho, &r.armaduras, nome, &[], "teste");
+            assert!(dxf.ends_with(b"EOF\r\n") && !dxf.contains(&b'?'), "{nome}: DXF inválido");
+            println!("  armação: {}", r.armaduras.iter().map(|a| a.descricao()).collect::<Vec<_>>().join(" ; "));
             if let Ok(pasta) = std::env::var("MEMORIAL_AMOSTRA") {
                 let html = crate::memorial_html::gerar(&r, nome, "teste");
                 std::fs::write(format!("{pasta}/memorial_{}.html", nome.to_lowercase()), html).unwrap();
+                std::fs::write(format!("{pasta}/detalhamento_{}.dxf", nome.to_lowercase()), dxf).unwrap();
             }
         }
     }

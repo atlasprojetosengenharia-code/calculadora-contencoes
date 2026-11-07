@@ -1,6 +1,7 @@
 //! Cortina atirantada — vários níveis de tirantes (NBR 5629 para tirantes,
 //! NBR 6118 para o painel). Cargas nos tirantes por áreas de influência.
 
+use crate::armadura::{self, Armadura};
 use crate::concreto::{flexao_retangular, Concreto};
 use crate::empuxo::{integrar, rad, ParamEmpuxo, Teoria};
 use crate::fatores::Fatores;
@@ -19,6 +20,7 @@ pub enum Diagrama {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct CortinaAtirantada {
     pub h: f64,
     /// Profundidades dos níveis de tirantes (m).
@@ -39,6 +41,8 @@ pub struct CortinaAtirantada {
     /// Ficha abaixo da escavação (m).
     pub ficha: f64,
     pub delta_passivo: f64,
+    /// Altura da viga de coroamento (m).
+    pub viga_h: f64,
     pub diagrama: Diagrama,
     pub concreto: Concreto,
     pub perfil: Perfil,
@@ -63,6 +67,7 @@ impl Default for CortinaAtirantada {
             placa: 0.30,
             ficha: 1.0,
             delta_passivo: 0.0,
+            viga_h: 0.5,
             diagrama: Diagrama::Aparente,
             concreto: Concreto::default(),
             perfil,
@@ -325,7 +330,8 @@ impl CortinaAtirantada {
         }
 
         // Painel
-        self.painel(&mut r, fat, &niveis, p_max, t_max);
+        let as_painel = self.painel(&mut r, fat, &niveis, p_max, t_max);
+        self.detalhamento(&mut r, &niveis, &tirantes, as_painel);
 
         self.cargas.avisar_minima(&mut r, fat.sobrecarga_minima);
         r.aviso("Comprimentos de bulbo e qs devem ser confirmados por ensaios de tirantes (NBR 5629, Anexo D).");
@@ -336,10 +342,11 @@ impl CortinaAtirantada {
         ));
         r.aviso("Folga do trecho livre além da cunha ativa e bulbo mínimo são critérios de projeto (editáveis em Fatores), não exigências da NBR 5629.");
         r.desenho = self.desenho(&tirantes, rho);
+        self.desenhar_armaduras(&mut r.desenho, &r.armaduras);
         r
     }
 
-    fn painel(&self, r: &mut Resultado, fat: &Fatores, niveis: &[f64], p_max: f64, t_max: f64) {
+    fn painel(&self, r: &mut Resultado, fat: &Fatores, niveis: &[f64], p_max: f64, t_max: f64) -> [f64; 2] {
         let c = &self.concreto;
         let e = self.espessura;
         let d = e - c.cobrimento - 0.01;
@@ -394,7 +401,114 @@ impl CortinaAtirantada {
             format!("u = {} m ;  τSd = {} MPa ;  τRd1 = {} MPa", fmt(u / 1000.0), fmt(tsd), fmt(trd1)),
         );
         r.verif(Verificacao::max("Punção na placa: τSd ≤ τRd1", tsd, trd1, "MPa"));
+        as_ad
     }
+
+    /// Detalhamento construtivo: tirantes, painel, viga de coroamento e blocos de ancoragem.
+    fn detalhamento(&self, r: &mut Resultado, niveis: &[f64], tirantes: &[Tirante], as_painel: [f64; 2]) {
+        let c = &self.concreto;
+        let (e, cob) = (self.espessura, c.cobrimento);
+        r.titulo("Detalhamento construtivo — cortina atirantada");
+        r.norma(normas::NBR5629_INICIO_BULBO);
+        r.linha(format!(
+            "Tirantes: {} linhas ; espaçamento horizontal {} m ; inclinação {}° com a horizontal ; furo Ø {} cm ; aço {} cm² (fyk {} MPa)",
+            niveis.len(),
+            fmt(self.espac_h),
+            fmt(self.inclinacao),
+            fmt(self.diam_furo * 100.0),
+            fmt(self.area_aco),
+            fmt(self.fyk_tirante)
+        ));
+        let esp_v: Vec<String> = niveis.windows(2).map(|w| fmt(w[1] - w[0])).collect();
+        r.linha(format!(
+            "Linhas de tirantes a {} m do topo ; espaçamento vertical entre linhas: {} m",
+            niveis.iter().map(|z| fmt(*z)).collect::<Vec<_>>().join(" ; "),
+            if esp_v.is_empty() { "—".into() } else { esp_v.join(" ; ") }
+        ));
+        for (i, t) in tirantes.iter().enumerate() {
+            r.linha(format!(
+                "T{} (z = {} m): trecho livre {} m + trecho ancorado (bulbo) {} m = {} m ; Ft = {} kN",
+                i + 1,
+                fmt(t.z),
+                fmt(t.l_livre),
+                fmt(t.l_bulbo),
+                fmt(t.l_livre + t.l_bulbo),
+                fmt(t.carga)
+            ));
+        }
+        let l_min = tirantes.iter().map(|t| t.l_livre).fold(f64::INFINITY, f64::min);
+        if l_min.is_finite() {
+            r.verif(Verificacao::min("Início do bulbo ≥ 3,0 m do paramento (NBR 5629 5.5.1 a)", l_min, 3.0, "m"));
+        }
+
+        // Painel: armadura nas duas faces e nas duas direções
+        let mut tab = Vec::new();
+        for (pos, elem, as_nec, comp) in [
+            ("N1", "Painel — vertical (cada face)", as_painel[0], self.h + self.ficha - 2.0 * cob),
+            ("N2", "Painel — horizontal (cada face)", as_painel[1], 0.0),
+        ] {
+            let (phi, s, as_ef) = armadura::malha_principal(as_nec, e);
+            let lb = armadura::lb_basico(phi, c.fck, c.fyk, 1.4, 1.15, pos == "N1");
+            tab.push(Armadura {
+                pos: pos.into(),
+                elemento: elem.into(),
+                bitola_mm: phi,
+                espac_cm: Some(s),
+                quantidade: format!("{}/m por face", (100.0 / s).ceil() as i64),
+                comprimento_m: comp,
+                as_nec,
+                as_ef,
+                unidade: "cm²/m",
+                lb_cm: armadura::lb_nec(lb, phi, as_nec, as_ef),
+            });
+        }
+        let bv = e.max(0.30);
+        tab.extend(armadura::viga_construtiva("N3", "N4", "Viga de coroamento", bv, self.viga_h, c.fck, c.fyk, cob));
+        r.formula(
+            "Viga de coroamento (armadura construtiva)",
+            "As,mín = ρmín·b·h ;  barras Ø12,5 (mín. 4) ;  estribos Ø6,3 c/15",
+            format!("b = {} m ;  h = {} m ;  fck = {} MPa", fmt(bv), fmt(self.viga_h), fmt(c.fck)),
+            format!("As,mín = {} cm² → {} Ø12,5", fmt(tab[2].as_nec), tab[2].quantidade),
+        );
+        r.linha(format!(
+            "Blocos de ancoragem: placa de aço {} × {} m perpendicular ao eixo do tirante (inclinação {}°), apoiada em nicho/bloco de concreto da cortina; a punção na placa é verificada na seção do painel.",
+            fmt(self.placa),
+            fmt(self.placa),
+            fmt(self.inclinacao)
+        ));
+        r.linha(format!(
+            "Painel de {} m de espessura, concreto C{}, cobrimento {} cm ; armadura N1/N2 nas duas faces (momentos positivos entre linhas e negativos nos tirantes).",
+            fmt(e),
+            fmt(c.fck),
+            fmt(cob * 100.0)
+        ));
+        r.armaduras.extend(tab);
+    }
+
+    /// Armaduras do painel e viga de coroamento no desenho.
+    fn desenhar_armaduras(&self, d: &mut Desenho, arm: &[Armadura]) {
+        let (e, cob) = (self.espessura, self.concreto.cobrimento);
+        let lt = self.h + self.ficha;
+        for x in [-cob, -(e - cob)] {
+            d.linha(Estilo::Armadura, vec![[x, -lt + cob], [x, -cob]]);
+        }
+        let mut y = -lt + 0.2;
+        while y < -0.1 {
+            d.circulo(Estilo::ArmaduraSecao, [-cob - 0.015, y], 0.012);
+            d.circulo(Estilo::ArmaduraSecao, [-(e - cob) + 0.015, y], 0.012);
+            y += 0.25;
+        }
+        d.retangulo(Estilo::Aco, -e.max(0.30), -self.viga_h, 0.0, 0.0);
+        if let Some(a) = arm.iter().find(|a| a.pos == "N1") {
+            d.texto([-e - 0.18 * self.h, -0.55 * self.h], a.descricao());
+        }
+        if let Some(a) = arm.iter().find(|a| a.pos == "N2") {
+            d.texto([-e - 0.18 * self.h, -0.62 * self.h], a.descricao());
+        }
+        d.linha(Estilo::Cota, vec![[-e.max(0.30), -self.viga_h / 2.0], [-e - 0.10 * self.h, -0.12 * self.h]]);
+        d.texto([-e - 0.18 * self.h, -0.15 * self.h], "viga de coroamento");
+    }
+
 
     fn desenho(&self, tirantes: &[Tirante], rho: f64) -> Desenho {
         let mut d = Desenho::default();

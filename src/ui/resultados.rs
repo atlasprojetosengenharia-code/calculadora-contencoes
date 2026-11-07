@@ -23,6 +23,31 @@ pub fn mostrar(ui: &mut egui::Ui, proj: &Projeto, res: &Resultado) -> Option<Str
             chip(ui, &format!("NÃO ATENDE — {n} verificação(ões)"), p.falha);
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui
+                .button("📐 Exportar DXF (AutoCAD)")
+                .on_hover_text("Seção, armaduras, tabela de armação e notas em DXF R12 (metros). No AutoCAD: abrir e “Salvar como” .dwg.")
+                .clicked()
+            {
+                let nome = format!("detalhamento_{}.dxf", proj.tipo.arquivo());
+                if let Some(arq) = rfd::FileDialog::new()
+                    .set_title("Exportar detalhamento em DXF")
+                    .set_file_name(&nome)
+                    .add_filter("Desenho DXF (AutoCAD)", &["dxf"])
+                    .save_file()
+                {
+                    let dxf = crate::dxf::gerar(
+                        &res.desenho,
+                        &res.armaduras,
+                        &titulo_memorial,
+                        &super::memorial::notas_detalhamento(res),
+                        &crate::sobre::versao_completa(),
+                    );
+                    msg = Some(match std::fs::write(&arq, dxf) {
+                        Ok(_) => format!("DXF salvo em {}", arq.display()),
+                        Err(e) => format!("Erro ao salvar: {e}"),
+                    });
+                }
+            }
             if ui.button("🌐 Exportar relatório (.html)").on_hover_text("Relatório visual com seção, fórmulas, normas e status — imprima ou salve em PDF pelo navegador").clicked() {
                 let nome = format!("memorial_{}.html", proj.tipo.arquivo());
                 if let Some(arq) = rfd::FileDialog::new()
@@ -75,6 +100,13 @@ pub fn mostrar(ui: &mut egui::Ui, proj: &Projeto, res: &Resultado) -> Option<Str
                 lista_verificacoes(ui, res);
             });
         });
+        if !res.armaduras.is_empty() {
+            ui.add_space(10.0);
+            cartao(ui, |ui| {
+                titulo(ui, "Detalhamento do aço — tabela de armação");
+                super::memorial::tabela_armacao(ui, &res.armaduras);
+            });
+        }
         if !res.avisos.is_empty() {
             ui.add_space(10.0);
             cartao(ui, |ui| {

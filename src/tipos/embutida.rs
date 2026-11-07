@@ -2,6 +2,7 @@
 //! Parede em balanço (Blum simplificado) ou com uma linha de apoio
 //! (suporte livre — free earth support). Cálculo por metro de parede.
 
+use crate::armadura::{self, Armadura};
 use crate::concreto::{as_circular, Concreto};
 use crate::empuxo::{integrar, rad, ParamEmpuxo, Teoria};
 use crate::fatores::Fatores;
@@ -398,6 +399,7 @@ impl ParedeEmbutida {
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct EstacaPrancha {
     pub parede: ParedeEmbutida,
     pub nome_perfil: String,
@@ -405,15 +407,51 @@ pub struct EstacaPrancha {
     pub w_perfil: f64,
     /// Tensão de escoamento do aço (MPa).
     pub fy: f64,
+    /// Altura da viga de travamento (m).
+    pub viga_h: f64,
 }
 
 impl Default for EstacaPrancha {
     fn default() -> Self {
-        Self { parede: ParedeEmbutida::default(), nome_perfil: "Perfil a definir".into(), w_perfil: 1300.0, fy: 270.0 }
+        Self { parede: ParedeEmbutida::default(), nome_perfil: "Perfil a definir".into(), w_perfil: 1300.0, fy: 270.0, viga_h: 0.5 }
     }
 }
 
 impl EstacaPrancha {
+    /// Detalhamento: perfil, engastamento e viga de travamento (chapéu).
+    fn detalhamento(&self, r: &mut Resultado, s: &Solucao) {
+        r.titulo("Detalhamento construtivo — estaca-prancha");
+        r.norma(normas::NBR8800_FLEXAO);
+        r.linha(format!(
+            "Perfil: {} (W = {} cm³/m, fy = {} MPa) ; cravação contínua com encaixes (juntas) travados",
+            self.nome_perfil,
+            fmt(self.w_perfil),
+            fmt(self.fy)
+        ));
+        r.linha(format!(
+            "Altura escavada {} m ; engastamento (ficha) {} m ; comprimento total do perfil {} m",
+            fmt(self.parede.h),
+            fmt(s.d),
+            fmt(self.parede.h + s.d)
+        ));
+        let (fck, fyk, cob) = (25.0, 500.0, 0.04);
+        let tab = armadura::viga_construtiva("N1", "N2", "Viga de travamento (chapéu)", 0.40, self.viga_h, fck, fyk, cob);
+        r.linha(format!(
+            "Viga de travamento (chapéu) em concreto armado C25, 0,40 × {} m, envolvendo o topo das pranchas; alternativa: perfil U soldado/aparafusado.",
+            fmt(self.viga_h)
+        ));
+        if self.parede.apoio == Apoio::Ancorada {
+            r.linha(format!(
+                "Longarina (viga de distribuição) na linha de apoio a {} m, com tirantes/estroncas a cada {} m e inclinação {}°.",
+                fmt(self.parede.prof_apoio),
+                fmt(self.parede.espac_apoio),
+                fmt(self.parede.incl_apoio)
+            ));
+        }
+        r.armaduras.extend(tab);
+    }
+
+
     pub fn calcular(&self, fat: &Fatores) -> Resultado {
         let mut r = Resultado::default();
         let s = self.parede.analisar(&mut r, fat);
@@ -436,6 +474,9 @@ impl EstacaPrancha {
             r.verif(Verificacao::min(format!("W do perfil ({})", self.nome_perfil), self.w_perfil, w_nec, "cm³/m"));
             r.aviso("Verificar também deslocamentos e a classe da seção (flambagem local) conforme catálogo do fabricante.");
         }
+        if let Some(s) = &s {
+            self.detalhamento(&mut r, s);
+        }
         r.aviso("Estabilidade global (NBR 11682) e ruptura de fundo ainda não implementadas.");
         r.desenho = self.parede.desenho(s.as_ref(), 0.012 * self.parede.h.max(4.0), Estilo::Aco);
         r
@@ -445,19 +486,22 @@ impl EstacaPrancha {
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ParedeEstacas {
     pub parede: ParedeEmbutida,
     pub diametro: f64,
     pub espacamento: f64,
     pub n_barras: usize,
     pub concreto: Concreto,
+    /// Altura da viga de travamento (coroamento) (m).
+    pub viga_h: f64,
 }
 
 impl Default for ParedeEstacas {
     fn default() -> Self {
         let mut c = Concreto::default();
         c.cobrimento = 0.05;
-        Self { parede: ParedeEmbutida::default(), diametro: 0.5, espacamento: 0.6, n_barras: 10, concreto: c }
+        Self { parede: ParedeEmbutida::default(), diametro: 0.5, espacamento: 0.6, n_barras: 10, concreto: c, viga_h: 0.6 }
     }
 }
 
@@ -469,6 +513,7 @@ impl ParedeEstacas {
         if self.espacamento < self.diametro * 0.999 {
             r.linha("Estacas secantes (espaçamento < diâmetro).");
         }
+        let mut as_long: Option<f64> = None;
         if let Some(s) = &s {
             r.titulo("Dimensionamento da estaca (NBR 6118 — seção circular)");
             let m = s.m_max * self.espacamento;
@@ -499,13 +544,15 @@ impl ParedeEstacas {
                         format!("As = {} cm² ;  As,mín = {} cm² ;  taxa = {} %", fmt(a), fmt(as_min), fmt(100.0 * a.max(as_min) / ac)),
                     );
                     r.verif(Verificacao::max("Taxa de armadura longitudinal", 100.0 * a.max(as_min) / ac, 4.0, "%"));
+                    as_long = Some(a.max(as_min));
                 }
                 None => {
                     r.aviso("Seção da estaca insuficiente mesmo com 4% de armadura — aumentar diâmetro ou reduzir espaçamento.");
                     r.verif(Verificacao::max("Taxa de armadura longitudinal", f64::INFINITY, 4.0, "%"));
                 }
             }
-            r.aviso("Cortante na estaca: dimensionar estribos/espiral conforme NBR 6118 (não verificado automaticamente).");
+            r.aviso("Cortante na estaca: verificar a hélice para a força cortante conforme NBR 6118 (aqui detalhada pelas disposições construtivas de 18.4.3).");
+            self.detalhamento(&mut r, s, as_long);
         }
         if self.espacamento > 3.0 * self.diametro {
             r.aviso("Espaçamento > 3D: verificar efeito de arco do solo entre estacas e necessidade de parede entre estacas.");
@@ -513,8 +560,153 @@ impl ParedeEstacas {
         r.aviso("Empuxo passivo calculado como parede contínua; para estacas espaçadas a largura efetiva do passivo é limitada (≈ 3D).");
         r.aviso("Estabilidade global (NBR 11682) e ruptura de fundo ainda não implementadas.");
         r.desenho = self.parede.desenho(s.as_ref(), self.diametro, Estilo::Concreto);
+        self.desenhar_secao(&mut r, s.as_ref().map(|x| x.d).unwrap_or(0.5 * self.parede.h));
         r
     }
+
+    /// Bitola longitudinal: menor Ø ≥ 10 mm e ≤ D/8 com n·A ≥ As (NBR 6118 18.4.2.1).
+    fn bitola_longitudinal(&self, as_nec: f64, n: usize) -> f64 {
+        let lim = self.diametro * 1000.0 / 8.0;
+        armadura::BITOLAS
+            .iter()
+            .copied()
+            .filter(|&p| p >= 10.0 && p <= lim)
+            .find(|&p| n as f64 * armadura::area_barra_cm2(p) >= as_nec)
+            .unwrap_or(32.0)
+    }
+
+    /// Detalhamento: estaca (longitudinal + hélice), espaçamento, ficha e viga de travamento.
+    fn detalhamento(&self, r: &mut Resultado, s: &Solucao, as_long: Option<f64>) {
+        let c = &self.concreto;
+        let (dm, cob) = (self.diametro, c.cobrimento);
+        let h = self.parede.h;
+        let l_total = h + s.d;
+        r.titulo("Detalhamento construtivo — parede de estacas");
+        r.norma(normas::NBR6118_PILAR_DET);
+        let vao = self.espacamento - dm;
+        r.linha(format!(
+            "Estacas Ø {} m a cada {} m (eixo a eixo) ; {} ; engastamento (ficha) {} m ; comprimento total {} m",
+            fmt(dm),
+            fmt(self.espacamento),
+            if vao < -1e-6 {
+                format!("secantes (sobreposição {} m)", fmt(-vao))
+            } else if vao < 0.05 {
+                "tangentes".to_string()
+            } else {
+                format!("vão livre {} m entre estacas (prever parede/arco entre estacas)", fmt(vao))
+            },
+            fmt(s.d),
+            fmt(l_total)
+        ));
+        let mut tab = Vec::new();
+        if let Some(as_l) = as_long {
+            let n = self.n_barras.max(6);
+            let phi = self.bitola_longitudinal(as_l, n);
+            let ab = armadura::area_barra_cm2(phi);
+            let r_s = dm / 2.0 - cob - 0.01 - phi / 2000.0;
+            let eixo_mm = 2.0 * std::f64::consts::PI * r_s * 1000.0 / n as f64;
+            let livre_mm = eixo_mm - phi;
+            let phi_t = [5.0, 6.3, 8.0, 10.0].into_iter().find(|&p| p >= (phi / 4.0).max(5.0)).unwrap_or(10.0);
+            let passo_cm = (((200.0f64).min(dm * 1000.0).min(12.0 * phi)) / 25.0).floor() * 2.5;
+            let lb = armadura::lb_basico(phi, c.fck, c.fyk, 1.4, 1.15, true);
+            r.formula(
+                "Armação da estaca (disposições construtivas)",
+                "n·A(Ø) ≥ As ;  10 mm ≤ Ø ≤ D/8 ;  eixo ≤ 400 mm ;  livre ≥ 20 mm ;  Øt ≥ máx(5 ; Ø/4) ;  s ≤ mín(200 mm ; D ; 12Ø)",
+                format!("As = {} cm² ;  n = {} ;  D = {} m ;  raio das barras = {} m", fmt(as_l), n, fmt(dm), fmt(r_s)),
+                format!(
+                    "{} Ø{} (As,ef = {} cm²) ;  eixo {} mm ;  livre {} mm ;  hélice Ø{} c/{} cm",
+                    n,
+                    armadura::fmt_bitola(phi),
+                    fmt(n as f64 * ab),
+                    fmt(eixo_mm),
+                    fmt(livre_mm),
+                    armadura::fmt_bitola(phi_t),
+                    fmt(passo_cm)
+                ),
+            );
+            r.verif(Verificacao::max("Estaca: espaçamento entre eixos das barras ≤ 400 mm (NBR 6118 18.4.2.2)", eixo_mm, 400.0, "mm"));
+            r.verif(Verificacao::min("Estaca: espaçamento livre entre barras ≥ 20 mm (NBR 6118 18.4.2.2)", livre_mm, 20.0_f64.max(phi), "mm"));
+            tab.push(Armadura {
+                pos: "N1".into(),
+                elemento: "Estaca — longitudinal".into(),
+                bitola_mm: phi,
+                espac_cm: None,
+                quantidade: format!("{n} por estaca"),
+                comprimento_m: l_total - cob + lb / 100.0,
+                as_nec: as_l,
+                as_ef: n as f64 * ab,
+                unidade: "cm²",
+                lb_cm: lb,
+            });
+            let espiras = l_total / (passo_cm / 100.0);
+            tab.push(Armadura {
+                pos: "N2".into(),
+                elemento: "Estaca — hélice (estribo contínuo)".into(),
+                bitola_mm: phi_t,
+                espac_cm: Some(passo_cm),
+                quantidade: format!("{} espiras", espiras.ceil() as i64),
+                comprimento_m: espiras * std::f64::consts::PI * (dm - 2.0 * cob),
+                as_nec: 0.0,
+                as_ef: armadura::area_barra_cm2(phi_t) * 100.0 / passo_cm,
+                unidade: "cm²/m",
+                lb_cm: 0.0,
+            });
+        }
+        let bv = (dm + 0.20).max(0.40);
+        tab.extend(armadura::viga_construtiva("N3", "N4", "Viga de travamento", bv, self.viga_h, c.fck, c.fyk, cob));
+        r.linha(format!(
+            "Viga de travamento (coroamento) {} × {} m sobre as estacas, com as barras N1 ancoradas {} cm na viga; vigas com armadura construtiva mínima.",
+            fmt(bv),
+            fmt(self.viga_h),
+            fmt(tab.first().map(|a| a.lb_cm).unwrap_or(0.0))
+        ));
+        if self.parede.apoio == Apoio::Ancorada {
+            r.linha(format!(
+                "Linha de tirantes/estroncas a {} m de profundidade, inclinação {}°, a cada {} m, apoiada em viga de distribuição (longarina).",
+                fmt(self.parede.prof_apoio),
+                fmt(self.parede.incl_apoio),
+                fmt(self.parede.espac_apoio)
+            ));
+        }
+        r.armaduras.extend(tab);
+    }
+
+    /// Detalhe da seção transversal da estaca, ampliado, ao lado da elevação.
+    fn desenhar_secao(&self, r: &mut Resultado, ficha: f64) {
+        let Some(n1) = r.armaduras.iter().find(|a| a.pos == "N1").cloned() else { return };
+        let h = self.parede.h;
+        let lt = h + ficha;
+        let dm = self.diametro;
+        // ampliação para o diâmetro aparecer com ~18 % da altura total da parede
+        let k = (0.18 * lt / dm).round().max(1.0);
+        let raio = k * dm / 2.0;
+        let cx = 1.1 * lt.max(h) + raio + 0.12 * lt;
+        let cy = -0.2 * lt - raio;
+        let dy = 0.05 * lt;
+        let d = &mut r.desenho;
+        d.circulo(Estilo::Concreto, [cx, cy], raio);
+        let n: usize = n1.quantidade.split_whitespace().next().and_then(|x| x.parse().ok()).unwrap_or(6);
+        let rs = k * (dm / 2.0 - self.concreto.cobrimento - 0.01 - n1.bitola_mm / 2000.0);
+        for i in 0..n {
+            let a = std::f64::consts::TAU * i as f64 / n as f64;
+            d.circulo(Estilo::ArmaduraSecao, [cx + rs * a.cos(), cy + rs * a.sin()], (k * n1.bitola_mm / 2000.0).max(0.02));
+        }
+        let rh = rs + k * (n1.bitola_mm / 2000.0 + 0.006);
+        let helice: Vec<[f64; 2]> = (0..=48)
+            .map(|i| {
+                let a = std::f64::consts::TAU * i as f64 / 48.0;
+                [cx + rh * a.cos(), cy + rh * a.sin()]
+            })
+            .collect();
+        d.linha(Estilo::Armadura, helice);
+        d.texto([cx, cy + raio + dy], format!("Seção da estaca Ø {} m (ampliada {}×)", fmt(dm), k));
+        d.texto([cx, cy - raio - dy], n1.descricao());
+        if let Some(n2) = r.armaduras.iter().find(|a| a.pos == "N2") {
+            let t = n2.descricao();
+            r.desenho.texto([cx, cy - raio - 2.0 * dy], t);
+        }
+    }
+
 }
 
 #[cfg(test)]

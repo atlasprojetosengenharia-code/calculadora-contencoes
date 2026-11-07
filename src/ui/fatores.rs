@@ -59,6 +59,14 @@ pub fn mostrar(ui: &mut egui::Ui, f: &mut Fatores) {
                     num(ui, "Sobrecarga mínima (7.3.3)", &mut f.sobrecarga_minima, "kPa", 0.0..=50.0, 0.5);
                 });
                 nota(ui, "NBR 11682:2009 Tabela 4: tombamento 2,0 ; deslizamento na base 1,5 ; capacidade de carga 3,0 (ou critérios da NBR 6122).");
+                ui.checkbox(
+                    &mut f.terco_central_permanente,
+                    "Exceção justificada: terço central só com ações permanentes (sem sobrecarga)",
+                )
+                .on_hover_text("NBR 11682 7.3.3.1: a resultante dos esforços envolvidos deve passar no terço central; casos contrários devem ser justificados. A combinação com sobrecarga continua verificada pela área comprimida ≥ 2/3 (NBR 6122 7.6.2).");
+                if f.terco_central_permanente {
+                    ui.label(RichText::new("⚠ Exceção à NBR 11682 7.3.3.1 — registre a justificativa no projeto.").small().color(super::tema::de(ui).alerta));
+                }
                 ui.add_space(4.0);
                 ui.label(RichText::new("Caso sísmico").strong());
                 grade(ui, "sis", |ui| {

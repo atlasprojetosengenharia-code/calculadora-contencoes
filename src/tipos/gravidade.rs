@@ -17,6 +17,8 @@
 //! D = projeção do tardoz, E = ressalto posterior, F = altura da base,
 //! H = altura do corpo (acima da base). Base = A + B + C + D + E.
 
+use crate::alvenaria::{self, ClasseArgamassa, Propriedades};
+use crate::armadura::{self, Armadura};
 use crate::empuxo::{integrar, rad, ParamEmpuxo, Teoria};
 use crate::estabilidade::{analisar, centroide, Forca, LimitesFs};
 use crate::fatores::Fatores;
@@ -104,10 +106,29 @@ pub struct MuroGravidade {
     pub considerar_passivo: bool,
     pub frac_passivo: f64,
     pub subpressao: bool,
-    /// Tensão de compressão admissível da alvenaria/concreto (MPa).
+    /// Dente de base (chave de cisalhamento) sob o corpo do muro.
+    pub dente: bool,
+    /// Profundidade do dente abaixo da base (m).
+    pub dente_h: f64,
+    /// Largura do dente (m).
+    pub dente_b: f64,
+    /// Banco de alvenarias: fck do concreto simples/ciclópico (MPa).
+    pub fck_alvenaria: f64,
+    /// Banco de alvenarias: classe da argamassa da pedra argamassada.
+    pub argamassa: ClasseArgamassa,
+    /// Usar valores do projetista em vez do banco de alvenarias.
+    pub personalizar_alvenaria: bool,
+    /// Tensão de compressão admissível (MPa) — só com `personalizar_alvenaria`.
     pub sigma_adm: f64,
-    /// Tração admissível nas juntas (MPa) — 0 = resultante no núcleo central.
+    /// Tração admissível nas juntas (MPa) — só com `personalizar_alvenaria`.
     pub tracao_adm: f64,
+    /// Cisalhamento admissível nas juntas (MPa) — só com `personalizar_alvenaria`.
+    pub tau_adm: f64,
+    /// Espaçamento das juntas de dilatação (m).
+    pub junta_espac: f64,
+    /// Viga de coroamento em concreto armado.
+    pub coroamento: bool,
+    pub coroamento_h: f64,
     pub aterro: Perfil,
     pub fundacao: SoloFundacao,
     pub cargas: Cargas,
@@ -129,8 +150,18 @@ impl Default for MuroGravidade {
             considerar_passivo: false,
             frac_passivo: 0.5,
             subpressao: true,
+            dente: false,
+            dente_h: 0.4,
+            dente_b: 0.4,
+            fck_alvenaria: 15.0,
+            argamassa: ClasseArgamassa::Media,
+            personalizar_alvenaria: false,
             sigma_adm: 1.0,
             tracao_adm: 0.0,
+            tau_adm: 0.05,
+            junta_espac: 10.0,
+            coroamento: true,
+            coroamento_h: 0.20,
             aterro: Perfil::simples(18.0, 30.0, 0.0),
             fundacao: SoloFundacao::default(),
             cargas: Cargas::default(),
@@ -301,6 +332,24 @@ pub fn passivo_frontal(f: &SoloFundacao, df: f64, frac: f64) -> Option<Forca> {
     Some(Forca::nova("Empuxo passivo frontal (reduzido)", -frac * (p1 + p2), 0.0, 0.0, y))
 }
 
+/// Empuxo passivo frontal até a base do dente (profundidade df + hd), reduzido
+/// por `frac`; `y` medido a partir da face inferior da base (negativo no dente).
+pub fn passivo_com_dente(f: &SoloFundacao, df: f64, hd: f64, frac: f64) -> Option<(Forca, f64)> {
+    let d = df.max(0.0) + hd.max(0.0);
+    if d <= 0.0 || frac <= 0.0 {
+        return None;
+    }
+    let kp = crate::empuxo::kp_rankine(rad(f.phi));
+    let p1 = 0.5 * kp * f.gamma * d * d;
+    let p2 = 2.0 * f.c * kp.sqrt() * d;
+    let y = (p1 * d / 3.0 + p2 * d / 2.0) / (p1 + p2) - hd.max(0.0);
+    Some((Forca::nova("Empuxo passivo frontal + dente (reduzido)", -frac * (p1 + p2), 0.0, 0.0, y), kp))
+}
+
+/// Espaçamento máximo das juntas de dilatação: exigência da NBR 6118 24.4 para
+/// concreto simples/ciclópico; adotado como critério para as demais alvenarias.
+pub const JUNTA_ESPAC_MAX: f64 = 15.0;
+
 /// Coordenadas principais da seção.
 pub struct Geo {
     pub htot: f64,
@@ -334,6 +383,30 @@ impl MuroGravidade {
         let g = self.geo();
         let t = ((y - self.f) / self.h.max(1e-6)).clamp(0.0, 1.0);
         (g.x_pf + self.proj_frente * t, g.x_pt - self.proj_tardoz * t)
+    }
+
+    /// Tensões admissíveis da alvenaria (banco de dados ou valores do projetista).
+    pub fn alvenaria(&self) -> Propriedades {
+        if self.personalizar_alvenaria {
+            return Propriedades {
+                sigma_adm: self.sigma_adm,
+                tracao_adm: self.tracao_adm,
+                c0: self.tau_adm,
+                mu: 0.0,
+                tau_max: f64::INFINITY,
+                origem: "valores informados pelo projetista".into(),
+            };
+        }
+        match self.material {
+            Material::ConcretoSimples | Material::ConcretoCiclopico => alvenaria::concreto_simples(self.fck_alvenaria),
+            Material::PedraArgamassada => alvenaria::pedra_argamassada(self.argamassa),
+            Material::Gabiao | Material::PedraSeca => alvenaria::gabiao(self.material.peso()),
+        }
+    }
+
+    /// Centro do dente (x, a partir da ponta): sob o pé do paramento frontal.
+    fn x_dente(&self) -> f64 {
+        self.geo().x_pf + self.dente_b / 2.0
     }
 
     pub fn calcular(&self, fat: &Fatores) -> Resultado {
@@ -415,11 +488,28 @@ impl MuroGravidade {
         // (profundidade do NA no plano de cálculo − altura do plano).
         let fundacao = self.fundacao.com_na(self.aterro.na().map(|n| n - hv));
 
-        if self.considerar_passivo {
+        let frac_p = self.frac_passivo.min(1.0 / fat.reducao_passivo_muros.max(1.0));
+        if self.dente && self.dente_h > 0.0 {
+            let wd = self.dente_b * self.dente_h * self.material.peso();
+            base.push(Forca::nova("Peso do dente de base", 0.0, wd, self.x_dente(), -self.dente_h / 2.0));
             r.norma(normas::NBR6122_PASSIVO);
-            if let Some(p) =
-                passivo_frontal(&self.fundacao, self.df, self.frac_passivo.min(1.0 / fat.reducao_passivo_muros.max(1.0)))
-            {
+            if let Some((p, kp)) = passivo_com_dente(&self.fundacao, self.df, self.dente_h, frac_p) {
+                let d = self.df + self.dente_h;
+                r.formula(
+                    "Dente de base — passivo mobilizado até a base do dente",
+                    "D = Df + hd ;  Ep = f·(½·Kp·γ·D² + 2c·√Kp·D) ;  Kp = tan²(45° + φ/2)",
+                    format!(
+                        "D = {} + {} ;  Kp = {} ;  γ = {} kN/m³ ;  c = {} kPa ;  f = {}",
+                        fmt(self.df), fmt(self.dente_h), fmt(kp), fmt(self.fundacao.gamma), fmt(self.fundacao.c), fmt(frac_p)
+                    ),
+                    format!("D = {} m ;  Ep = {} kN/m (somado à resistência ao deslizamento)", fmt(d), fmt(-p.h)),
+                );
+                base.push(p);
+            }
+            r.aviso("Dente de base: o passivo à frente só pode ser considerado se o solo for mantido permanentemente (sem escavações futuras).");
+        } else if self.considerar_passivo {
+            r.norma(normas::NBR6122_PASSIVO);
+            if let Some(p) = passivo_frontal(&self.fundacao, self.df, frac_p) {
                 base.push(p);
             }
         }
@@ -439,9 +529,16 @@ impl MuroGravidade {
         let ph_q = formula_empuxo(&mut r, &self.empuxo, &self.aterro, &self.cargas, theta, hv, &est);
         let mut f_est = base.clone();
         f_est.extend(est.forcas.iter().cloned());
-        analisar(&mut r, "estático", &f_est, b, &fundacao, self.df, &LimitesFs::estatico(fat));
+        // ações permanentes (sem sobrecarga nem carga em faixa) — terço central
+        let mut cargas_perm = self.cargas.clone();
+        cargas_perm.q_uniforme = 0.0;
+        cargas_perm.usar_faixa = false;
+        let perm = empuxo_no_plano(&self.aterro, &cargas_perm, &self.empuxo, theta, hv, &*plano_x, false);
+        let mut f_perm = base.clone();
+        f_perm.extend(perm.forcas.iter().cloned());
+        analisar(&mut r, "estático", &f_est, Some(&f_perm), b, &fundacao, self.df, &LimitesFs::estatico(fat));
         let ph_total: f64 = est.forcas.iter().map(|f| f.h.max(0.0)).sum();
-        diagnostico_deslizamento(&mut r, ph_q, ph_total, self.considerar_passivo);
+        diagnostico_deslizamento(&mut r, ph_q, ph_total, self.considerar_passivo || self.dente);
 
         // Caso sísmico
         if self.cargas.usar_sismo {
@@ -453,10 +550,11 @@ impl MuroGravidade {
             if let Some((ws, xs, ys)) = cunha {
                 f.push(Forca::nova("Inércia do solo s/ tardoz", kh * ws, -kv * ws, xs, ys));
             }
-            analisar(&mut r, "sísmico", &f, b, &fundacao, self.df, &LimitesFs::sismico(fat));
+            analisar(&mut r, "sísmico", &f, None, b, &fundacao, self.df, &LimitesFs::sismico(fat));
         }
 
         self.secoes_internas(&mut r, hv, theta);
+        self.detalhamento(&mut r);
 
         self.cargas.avisar_minima(&mut r, fat.sobrecarga_minima);
         if self.material == Material::Gabiao || self.material == Material::PedraSeca {
@@ -467,18 +565,38 @@ impl MuroGravidade {
         r
     }
 
-    /// Tensões em seções horizontais do corpo (alvenaria/concreto não armado).
+    /// Tensões em seções horizontais do corpo (alvenaria/concreto não armado):
+    /// compressão, tração e cisalhamento nas juntas.
     fn secoes_internas(&self, r: &mut Resultado, hv: f64, theta: f64) {
         let g = self.geo();
         let ht = g.htot;
+        let prop = self.alvenaria();
         r.titulo("Seções internas do corpo (tensões na alvenaria)");
-        r.linha(format!(
-            "σ admissível = {} MPa ; tração admissível = {} MPa (critério do projetista)",
-            fmt(self.sigma_adm), fmt(self.tracao_adm)
-        ));
+        if !self.personalizar_alvenaria {
+            r.norma(match self.material {
+                Material::ConcretoSimples | Material::ConcretoCiclopico => normas::NBR6118_CONCRETO_SIMPLES,
+                Material::PedraArgamassada => normas::NBR16868_JUNTAS,
+                Material::Gabiao | Material::PedraSeca => normas::MACCAFERRI_GABIAO,
+            });
+        }
+        r.formula(
+            format!("Tensões admissíveis — {}", self.material.nome()),
+            "σadm ;  σt,adm ;  τadm = c0 + μ·σ ≤ τmáx",
+            prop.origem.clone(),
+            format!(
+                "σadm = {} MPa ;  σt,adm = {} MPa ;  τadm = {} + {}·σ{} MPa",
+                fmt(prop.sigma_adm),
+                fmt(prop.tracao_adm),
+                format!("{:.3}", prop.c0).replace('.', ","),
+                format!("{:.3}", prop.mu).replace('.', ","),
+                if prop.tau_max.is_finite() { format!(" ≤ {}", fmt(prop.tau_max)) } else { String::new() }
+            ),
+        );
         let incl = self.empuxo.inclinacao_ativa(theta);
         let mut pior_comp = 0.0f64;
         let mut pior_tracao = f64::INFINITY;
+        // (razão τ/τadm, τ, τadm, cota)
+        let mut pior_cis = (0.0f64, 0.0f64, f64::INFINITY, 0.0f64);
         for frac in [0.0, 0.25, 0.5, 0.75] {
             let ys = self.f + frac * self.h;
             let (xl, xr) = self.faces(ys);
@@ -511,12 +629,18 @@ impl MuroGravidade {
                 let xr = x_r.min(w - x_r).max(1e-3);
                 (2.0 * n / (3.0 * xr), -n / w * (6.0 * e.abs() / w - 1.0))
             };
+            let tau = ph / w / 1000.0;
+            let tadm = prop.tau_adm(n / w / 1000.0);
             r.linha(format!(
-                "y = {} m (largura {} m): N = {} kN/m ; H = {} kN/m ; e = {} m ; σmáx = {} kPa ; σmín = {} kPa",
-                fmt(ys), fmt(w), fmt(n), fmt(ph), fmt(e), fmt(smax), fmt(smin)
+                "y = {} m (largura {} m): N = {} kN/m ; H = {} kN/m ; e = {} m ; σmáx = {} kPa ; σmín = {} kPa ; τ = {} kPa",
+                fmt(ys), fmt(w), fmt(n), fmt(ph), fmt(e), fmt(smax), fmt(smin), fmt(tau * 1000.0)
             ));
             pior_comp = pior_comp.max(smax);
             pior_tracao = pior_tracao.min(smin);
+            let razao = if tadm > 0.0 { tau / tadm } else if tau > 0.0 { f64::INFINITY } else { 0.0 };
+            if razao >= pior_cis.0 {
+                pior_cis = (razao, tau, tadm, ys);
+            }
         }
         r.formula(
             "Tensões nas seções horizontais do corpo",
@@ -524,8 +648,115 @@ impl MuroGravidade {
             "N = peso do corpo acima da seção + Pv ;  e = b/2 − ΣM/N",
             format!("σmáx = {} MPa ;  σmín = {} MPa", fmt(pior_comp / 1000.0), fmt(pior_tracao / 1000.0)),
         );
-        r.verif(Verificacao::max("Compressão máx. no corpo", pior_comp / 1000.0, self.sigma_adm, "MPa"));
-        r.verif(Verificacao::min("Tensão mín. no corpo (tração)", pior_tracao / 1000.0, -self.tracao_adm, "MPa"));
+        r.verif(Verificacao::max("Compressão máx. no corpo", pior_comp / 1000.0, prop.sigma_adm, "MPa"));
+        r.verif(Verificacao::min("Tensão mín. no corpo (tração)", pior_tracao / 1000.0, -prop.tracao_adm, "MPa"));
+        r.formula(
+            format!("Cisalhamento na junta horizontal mais solicitada (y = {} m)", fmt(pior_cis.3)),
+            "τ = H / b ;  τadm = c0 + μ·(N/b)",
+            "H = empuxo horizontal acima da junta ;  N/b = compressão média na junta",
+            format!(
+                "τ = {} MPa ;  τadm = {} MPa",
+                format!("{:.3}", pior_cis.1).replace('.', ","),
+                format!("{:.3}", pior_cis.2).replace('.', ",")
+            ),
+        );
+        r.verif(Verificacao::max("Cisalhamento nas juntas: τ ≤ τadm", pior_cis.1, pior_cis.2, "MPa"));
+    }
+
+    fn coroa_aplicavel(&self) -> bool {
+        !matches!(self.material, Material::Gabiao | Material::PedraSeca)
+    }
+
+    /// Detalhamento construtivo: juntas, coroamento e drenagem de base.
+    fn detalhamento(&self, r: &mut Resultado) {
+        let g = self.geo();
+        r.titulo("Detalhamento construtivo — muro de gravidade");
+        r.linha(format!(
+            "Seção: base {} m ; crista {} m ; altura total {} m (corpo {} m + base {} m) ; paramento 1:{} ; tardoz 1:{}",
+            fmt(g.base),
+            fmt(self.crista),
+            fmt(g.htot),
+            fmt(self.h),
+            fmt(self.f),
+            fmt(self.proj_frente / self.h.max(1e-6)),
+            fmt(self.proj_tardoz / self.h.max(1e-6))
+        ));
+        if self.dente && self.dente_h > 0.0 {
+            r.linha(format!(
+                "Dente de base: {} m (largura) × {} m (profundidade), sob o pé do paramento, concretado contra o solo sem forma.",
+                fmt(self.dente_b),
+                fmt(self.dente_h)
+            ));
+        }
+        if !self.coroa_aplicavel() {
+            r.linha("Estrutura flexível (gabião/pedra seca): dispensa juntas de dilatação e viga de coroamento; caixas amarradas entre si com arame da mesma especificação da malha.");
+            r.linha("Geotêxtil não tecido entre o tardoz e o aterro (filtro) e sob a primeira camada, se o solo de fundação for erodível.");
+        } else {
+            r.formula(
+                "Juntas de dilatação",
+                "Juntas verticais a cada s_j, atravessando base e corpo",
+                format!("s_j = {} m", fmt(self.junta_espac)),
+                format!(
+                    "Juntas a cada {} m ; abertura 2 cm ; placa compressível (EPS) + selante ; geotêxtil cobrindo a junta no tardoz",
+                    fmt(self.junta_espac)
+                ),
+            );
+            let origem_junta = match self.material {
+                Material::ConcretoSimples | Material::ConcretoCiclopico => "NBR 6118 24.4",
+                _ => "critério de projeto",
+            };
+            r.verif(Verificacao::max(
+                format!("Juntas de dilatação: espaçamento ≤ {} m ({origem_junta})", fmt(JUNTA_ESPAC_MAX)),
+                self.junta_espac,
+                JUNTA_ESPAC_MAX,
+                "m",
+            ));
+            if self.coroamento {
+                let (bc, hc) = (self.crista, self.coroamento_h.min(0.5 * self.h));
+                let (fck, fyk, cob) = (25.0, 500.0, 0.03);
+                let lb = armadura::lb_basico(10.0, fck, fyk, 1.4, 1.15, true);
+                let as_min = crate::concreto::rho_min(fck) * bc * hc * 1e4;
+                let as_ef = 4.0 * armadura::area_barra_cm2(10.0);
+                let l_barra = (self.junta_espac - 2.0 * cob).max(1.0);
+                let est = 2.0 * (bc - 2.0 * cob) + 2.0 * (hc - 2.0 * cob) + 2.0 * 0.10;
+                r.formula(
+                    "Viga de coroamento (concreto armado C25)",
+                    "As,mín = ρmín·b·h ;  armadura construtiva 4 Ø10 + estribos Ø6,3 c/20",
+                    format!("As,mín = {}·{}·{}", format!("{:.4}", crate::concreto::rho_min(fck)).replace('.', ","), fmt(bc), fmt(hc)),
+                    format!("As,mín = {} cm² ;  4 Ø10 = {} cm² ;  lb = {} cm", fmt(as_min), fmt(as_ef), fmt(lb)),
+                );
+                r.armaduras.push(Armadura {
+                    pos: "N1".into(),
+                    elemento: "Coroamento — longitudinal".into(),
+                    bitola_mm: 10.0,
+                    espac_cm: None,
+                    quantidade: "4".into(),
+                    comprimento_m: l_barra,
+                    as_nec: as_min,
+                    as_ef,
+                    unidade: "cm²",
+                    lb_cm: lb,
+                });
+                r.armaduras.push(Armadura {
+                    pos: "N2".into(),
+                    elemento: "Coroamento — estribos".into(),
+                    bitola_mm: 6.3,
+                    espac_cm: Some(20.0),
+                    quantidade: "5/m".into(),
+                    comprimento_m: est,
+                    as_nec: 0.0,
+                    as_ef: armadura::area_barra_cm2(6.3) * 2.0 * 5.0,
+                    unidade: "cm²/m",
+                    lb_cm: 0.0,
+                });
+                r.linha(format!(
+                    "Coroamento: viga {} × {} m em concreto armado C25, 4 Ø10 (N1) e estribos Ø6,3 c/20 (N2), interrompida nas juntas.",
+                    fmt(bc),
+                    fmt(hc)
+                ));
+            }
+        }
+        r.linha("Drenagem de base: colchão drenante, dreno de pé e barbacãs conforme a seção “Drenagem”.");
     }
 
     fn desenho(&self, diag: &[(f64, f64)], _hv: f64) -> Desenho {
@@ -550,8 +781,22 @@ impl MuroGravidade {
         d.poli(Estilo::Solo, vec![[g.x_pt, f], [b, f], [b, sup(b)], [g.x_cr, ht]]);
         // muro: base + corpo (polígonos convexos)
         d.retangulo(Estilo::Concreto, 0.0, 0.0, b, f);
+        if self.dente && self.dente_h > 0.0 {
+            let x0 = self.x_dente() - self.dente_b / 2.0;
+            d.retangulo(Estilo::Concreto, x0, -self.dente_h, x0 + self.dente_b, 0.0);
+            d.texto([x0 + self.dente_b / 2.0, -self.dente_h - 0.06 * ht], "dente");
+        }
         d.poli(Estilo::Concreto, vec![[g.x_pf, f], [g.x_pt, f], [g.x_cr, ht], [g.x_cl, ht]]);
 
+        if self.coroamento && self.coroa_aplicavel() {
+            let hc = self.coroamento_h.min(0.5 * self.h);
+            d.retangulo(Estilo::Aco, g.x_cl, ht - hc, g.x_cr, ht);
+            let c = 0.04;
+            for (x, y) in [(g.x_cl + c, ht - hc + c), (g.x_cr - c, ht - hc + c), (g.x_cl + c, ht - c), (g.x_cr - c, ht - c)] {
+                d.circulo(Estilo::ArmaduraSecao, [x, y], 0.012 * ht.max(1.0));
+            }
+            d.texto([(g.x_cl + g.x_cr) / 2.0, ht + 0.16 * ht], "coroamento");
+        }
         if let Some(na) = self.aterro.na() {
             let y = ht - na;
             if y > 0.0 {
@@ -683,6 +928,67 @@ mod testes {
         let fs = r.verificacoes.iter().find(|v| v.nome.starts_with("FS deslizamento")).unwrap().valor;
         assert!((fs - 0.542).abs() < 0.01, "{fs}");
         assert!(r.avisos.iter().any(|a| a.contains("sobrecarga responde por 69")), "{:?}", r.avisos);
+    }
+
+    #[test]
+    fn dente_aumenta_deslizamento() {
+        let mut m = MuroGravidade::default();
+        m.cargas.q_uniforme = 0.0;
+        let fs = |m: &MuroGravidade| {
+            let r = m.calcular(&Fatores::default());
+            r.verificacoes.iter().find(|v| v.nome.starts_with("FS deslizamento")).unwrap().valor
+        };
+        let sem = fs(&m);
+        m.dente = true;
+        let com = fs(&m);
+        assert!(com > sem + 0.05, "sem {sem} ; com {com}");
+        // passivo até a base do dente: D = 0,6 + 0,4 = 1,0 m ; Kp(30°) = 3 ; c = 10 ; f = 0,5
+        // Ep = 0,5·(½·3·19·1² + 2·10·√3·1) = 0,5·(28,5 + 34,64) = 31,57 kN/m
+        let (p, _) = passivo_com_dente(&m.fundacao, 0.6, 0.4, 0.5).unwrap();
+        assert!((-p.h - 31.57).abs() < 0.05, "{}", -p.h);
+    }
+
+    #[test]
+    fn terco_central_com_acoes_permanentes() {
+        // muro de 1 m com q = 20 kPa: o terço central usa só as ações permanentes
+        let mut m = MuroGravidade::default();
+        m.h = 1.0;
+        m.f = 0.3;
+        m.crista = 0.5;
+        m.proj_frente = 0.3;
+        m.proj_tardoz = 0.0;
+        m.cargas.q_uniforme = 20.0;
+        let e = |f: &Fatores| {
+            let r = m.calcular(f);
+            r.verificacoes.iter().find(|v| v.nome.starts_with("Excentricidade")).unwrap().valor
+        };
+        // padrão (NBR 11682 7.3.3.1): todas as ações ; exceção justificada: só permanentes
+        let mut f = Fatores::default();
+        assert!(!f.terco_central_permanente);
+        let e_total = e(&f);
+        f.terco_central_permanente = true;
+        let e_perm = e(&f);
+        assert!(e_perm < e_total, "perm {e_perm} ; total {e_total}");
+        let r = m.calcular(&f);
+        assert!(r.avisos.iter().any(|a| a.contains("exceção à NBR 11682 7.3.3.1")));
+    }
+
+    #[test]
+    fn banco_de_alvenaria_e_detalhamento() {
+        let mut m = MuroGravidade::default();
+        m.material = Material::ConcretoCiclopico;
+        let p = m.alvenaria();
+        assert!((p.sigma_adm - crate::alvenaria::concreto_simples(15.0).sigma_adm).abs() < 1e-12);
+        let r = m.calcular(&Fatores::default());
+        assert!(r.verificacoes.iter().any(|v| v.nome.starts_with("Cisalhamento nas juntas")));
+        assert!(r.armaduras.iter().any(|a| a.elemento.contains("Coroamento")));
+        m.personalizar_alvenaria = true;
+        m.sigma_adm = 3.0;
+        assert_eq!(m.alvenaria().sigma_adm, 3.0);
+        m.material = Material::Gabiao;
+        m.personalizar_alvenaria = false;
+        let r = m.calcular(&Fatores::default());
+        assert!(r.armaduras.is_empty(), "gabião sem coroamento armado");
     }
 
     #[test]

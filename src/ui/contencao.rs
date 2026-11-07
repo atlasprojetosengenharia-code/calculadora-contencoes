@@ -15,7 +15,8 @@ use crate::tipos::atirantada::{CortinaAtirantada, Diagrama};
 use crate::tipos::embutida::{Apoio, EstacaPrancha, ParedeEmbutida, ParedeEstacas};
 use crate::tipos::flexao::MuroFlexao;
 use crate::tipos::grampeado::SoloGrampeado;
-use crate::tipos::gravidade::{MuroGravidade, MATERIAIS};
+use crate::alvenaria::CLASSES_ARGAMASSA;
+use crate::tipos::gravidade::{Material, MuroGravidade, MATERIAIS};
 use eframe::egui::{self, RichText, Stroke};
 
 /// Retorna `true` se o usuário pediu para ver os resultados.
@@ -229,6 +230,72 @@ fn passivo_subpressao(ui: &mut egui::Ui, passivo: &mut bool, frac: &mut f64, sub
     ui.checkbox(sub, "Considerar subpressão na base");
 }
 
+/// Dente de base (chave de cisalhamento).
+fn dente_ui(ui: &mut egui::Ui, dente: &mut bool, h: &mut f64, b: &mut f64) {
+    ui.checkbox(dente, "Dente de base (chave de cisalhamento)")
+        .on_hover_text("Mobiliza o empuxo passivo até a base do dente, reduzido conforme NBR 6122 7.6.3 (solo à frente mantido permanentemente).");
+    if *dente {
+        grade(ui, "dente", |ui| {
+            num(ui, "   Profundidade do dente", h, "m", 0.10..=2.0, 0.01);
+            num(ui, "   Largura do dente", b, "m", 0.15..=1.5, 0.01);
+        });
+    }
+}
+
+/// Banco de alvenarias: tensões admissíveis automáticas por material.
+fn alvenaria_ui(ui: &mut egui::Ui, m: &mut MuroGravidade) {
+    let p = tema::de(ui);
+    egui::CollapsingHeader::new("Alvenaria — tensões admissíveis").id_salt("alv").default_open(true).show(ui, |ui| {
+        match m.material {
+            Material::ConcretoSimples | Material::ConcretoCiclopico => {
+                grade(ui, "alv_c", |ui| {
+                    num(ui, "fck do concreto (C15 a C40)", &mut m.fck_alvenaria, "MPa", 15.0..=40.0, 0.5);
+                });
+            }
+            Material::PedraArgamassada => {
+                ui.horizontal(|ui| {
+                    ui.label("Argamassa (resist. média):");
+                    egui::ComboBox::from_id_salt("argamassa").selected_text(m.argamassa.nome()).show_ui(ui, |ui| {
+                        for a in CLASSES_ARGAMASSA {
+                            ui.selectable_value(&mut m.argamassa, a, a.nome());
+                        }
+                    });
+                });
+            }
+            Material::Gabiao | Material::PedraSeca => {}
+        }
+        ui.checkbox(&mut m.personalizar_alvenaria, "Informar valores do projetista");
+        if m.personalizar_alvenaria {
+            grade(ui, "alv_p", |ui| {
+                num(ui, "σ admissível (compressão)", &mut m.sigma_adm, "MPa", 0.05..=20.0, 0.05);
+                num(ui, "Tração admissível nas juntas", &mut m.tracao_adm, "MPa", 0.0..=2.0, 0.01);
+                num(ui, "Cisalhamento admissível", &mut m.tau_adm, "MPa", 0.0..=2.0, 0.01);
+            });
+        }
+        let pr = m.alvenaria();
+        egui::Grid::new("alv_res").num_columns(2).spacing([14.0, 4.0]).show(ui, |ui| {
+            let linha = |ui: &mut egui::Ui, n: &str, v: String| {
+                ui.label(n);
+                ui.label(RichText::new(v).font(tema::fonte_forte(14.5)).color(p.destaque));
+                ui.end_row();
+            };
+            linha(ui, "σadm (compressão)", format!("{} MPa", fmt(pr.sigma_adm)));
+            linha(ui, "σt,adm (tração nas juntas)", format!("{} MPa", fmt(pr.tracao_adm)));
+            linha(
+                ui,
+                "τadm (cisalhamento)",
+                format!(
+                    "{} + {}·σ{} MPa",
+                    format!("{:.3}", pr.c0).replace('.', ","),
+                    format!("{:.3}", pr.mu).replace('.', ","),
+                    if pr.tau_max.is_finite() { format!(" ≤ {}", fmt(pr.tau_max)) } else { String::new() }
+                ),
+            );
+        });
+        nota(ui, &pr.origem);
+    });
+}
+
 fn det_gravidade(ui: &mut egui::Ui, m: &mut MuroGravidade, h: f64) {
     ui.horizontal(|ui| {
         croqui_gravidade(ui);
@@ -254,12 +321,22 @@ fn det_gravidade(ui: &mut egui::Ui, m: &mut MuroGravidade, h: f64) {
         num(ui, "D — projeção do tardoz", &mut m.proj_tardoz, "m", -2.0..=5.0, 0.01);
         num(ui, "E — ressalto posterior", &mut m.ressalto_tras, "m", 0.0..=3.0, 0.01);
         num(ui, "F — altura da base", &mut m.f, "m", 0.0..=3.0, 0.01);
-        num(ui, "σ admissível da alvenaria", &mut m.sigma_adm, "MPa", 0.1..=20.0, 0.05);
-        num(ui, "Tração admissível nas juntas", &mut m.tracao_adm, "MPa", 0.0..=2.0, 0.01);
     });
     nota(ui, &format!("γ fixo: {}.", m.material.origem()));
-    nota(ui, "σ admissível: critério do projetista (não definido nas normas fornecidas).");
+    alvenaria_ui(ui, m);
     passivo_subpressao(ui, &mut m.considerar_passivo, &mut m.frac_passivo, &mut m.subpressao);
+    dente_ui(ui, &mut m.dente, &mut m.dente_h, &mut m.dente_b);
+    egui::CollapsingHeader::new("Detalhamento construtivo (juntas e coroamento)").id_salt("grav_det").show(ui, |ui| {
+        grade(ui, "grav_det_g", |ui| {
+            num(ui, "Espaçamento das juntas de dilatação", &mut m.junta_espac, "m", 3.0..=30.0, 0.5);
+        });
+        ui.checkbox(&mut m.coroamento, "Viga de coroamento em concreto armado");
+        if m.coroamento {
+            grade(ui, "grav_det_c", |ui| {
+                num(ui, "Altura da viga de coroamento", &mut m.coroamento_h, "m", 0.10..=0.80, 0.01);
+            });
+        }
+    });
     fundacao(ui, &mut m.fundacao, "na cota da base (z = H + F)");
 }
 
@@ -272,6 +349,7 @@ fn det_flexao(ui: &mut egui::Ui, m: &mut MuroFlexao) {
         num(ui, "Comprimento do talão", &mut m.b_talao, "m", 0.0..=10.0, 0.01);
     });
     passivo_subpressao(ui, &mut m.considerar_passivo, &mut m.frac_passivo, &mut m.subpressao);
+    dente_ui(ui, &mut m.dente, &mut m.dente_h, &mut m.dente_b);
     fundacao(ui, &mut m.fundacao, "na cota da base (z = H)");
     concreto(ui, "flex_c", &mut m.concreto);
 }
@@ -294,6 +372,7 @@ fn det_atirantada(ui: &mut egui::Ui, c: &mut CortinaAtirantada, f: &mut Fatores,
     grade(ui, "cort", |ui| {
         num(ui, "Espessura da cortina", &mut c.espessura, "m", 0.12..=1.0, 0.01);
         num(ui, "Placa de ancoragem (lado)", &mut c.placa, "m", 0.1..=0.8, 0.01);
+        num(ui, "Altura da viga de coroamento", &mut c.viga_h, "m", 0.3..=1.5, 0.01);
         if emp.teoria == Teoria::Coulomb {
             num(ui, "δ no lado passivo", &mut c.delta_passivo, "°", 0.0..=30.0, 0.25);
         }
@@ -376,6 +455,7 @@ fn det_prancha(ui: &mut egui::Ui, e: &mut EstacaPrancha, emp: &ParamEmpuxo) {
     });
     grade(ui, "pran", |ui| {
         num(ui, "Módulo resistente W", &mut e.w_perfil, "cm³/m", 100.0..=10000.0, 5.0);
+        num(ui, "Altura da viga de travamento", &mut e.viga_h, "m", 0.3..=1.5, 0.01);
         num(ui, "fy do aço", &mut e.fy, "MPa", 200.0..=500.0, 5.0);
     });
 }
@@ -386,6 +466,7 @@ fn det_estacas(ui: &mut egui::Ui, e: &mut ParedeEstacas, emp: &ParamEmpuxo) {
     grade(ui, "est", |ui| {
         num(ui, "Diâmetro", &mut e.diametro, "m", 0.2..=2.0, 0.01);
         num(ui, "Espaçamento (eixo a eixo)", &mut e.espacamento, "m", 0.15..=5.0, 0.01);
+        num(ui, "Altura da viga de travamento", &mut e.viga_h, "m", 0.3..=1.5, 0.01);
         ui.label("Nº de barras longitudinais");
         ui.add(egui::DragValue::new(&mut e.n_barras).range(6..=40));
         ui.end_row();

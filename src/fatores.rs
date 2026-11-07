@@ -60,6 +60,10 @@ pub struct Fatores {
     pub excentricidade_max: f64,
     /// NBR 6122 7.6.2: área comprimida ≥ 2/3 da base (ações características).
     pub area_comprimida_min: f64,
+    /// Exceção justificada à NBR 11682 7.3.3.1: terço central (e ≤ B/6)
+    /// verificado só com as ações permanentes (a combinação total segue coberta
+    /// pela área comprimida ≥ 2/3 da NBR 6122 7.6.2). Padrão: desligado.
+    pub terco_central_permanente: bool,
 
     // --- Caso sísmico (muros) ---
     pub fs_deslizamento_sismo: f64,
@@ -120,6 +124,7 @@ impl Default for Fatores {
             fs_capacidade_carga: 3.0,
             excentricidade_max: 1.0 / 6.0,
             area_comprimida_min: 2.0 / 3.0,
+            terco_central_permanente: false,
 
             fs_deslizamento_sismo: 1.5,
             fs_tombamento_sismo: 2.0,

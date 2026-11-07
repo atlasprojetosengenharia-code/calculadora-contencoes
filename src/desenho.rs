@@ -39,6 +39,8 @@ fn cor(estilo: Estilo, escuro: bool) -> (Color32, Stroke) {
             (f, s(1.0, Color32::from_rgb(70, 160, 200)))
         }
         Estilo::Barbaca => (Color32::from_rgb(40, 140, 220), s(3.0, Color32::from_rgb(40, 140, 220))),
+        Estilo::Armadura => (Color32::TRANSPARENT, s(2.2, Color32::from_rgb(200, 30, 60))),
+        Estilo::ArmaduraSecao => (Color32::from_rgb(200, 30, 60), s(1.0, Color32::from_rgb(140, 10, 40))),
     }
 }
 

@@ -108,6 +108,41 @@ fn verificacao(ui: &mut egui::Ui, v: &Verificacao, p: &Paleta) {
         });
 }
 
+/// Tabela de armação (detalhamento do aço).
+pub fn tabela_armacao(ui: &mut egui::Ui, arm: &[crate::armadura::Armadura]) {
+    let p = tema::de(ui);
+    egui::ScrollArea::horizontal().id_salt("tab_arm_h").show(ui, |ui| {
+        egui::Grid::new("tab_armacao").num_columns(9).striped(true).spacing([14.0, 5.0]).show(ui, |ui| {
+            for c in crate::armadura::CABECALHO {
+                ui.label(RichText::new(c).font(tema::fonte_forte(13.0)).color(p.fraco));
+            }
+            ui.end_row();
+            for a in arm {
+                for (i, c) in a.celulas().into_iter().enumerate() {
+                    let t = RichText::new(c);
+                    ui.label(if i == 0 || i == 2 { t.strong().color(p.destaque) } else { t });
+                }
+                ui.end_row();
+            }
+        });
+    });
+    ui.label(RichText::new("CA-50 ; comprimentos aproximados — conferir dobras, cobrimentos e emendas no projeto executivo.").small().color(p.fraco));
+}
+
+/// Linhas de texto da seção de detalhamento construtivo (notas do DXF).
+pub fn notas_detalhamento(res: &Resultado) -> Vec<String> {
+    let mut dentro = false;
+    let mut v = Vec::new();
+    for b in &res.blocos {
+        match b {
+            Bloco::Titulo(t) => dentro = t.starts_with("Detalhamento construtivo"),
+            Bloco::Texto(t) if dentro && !t.is_empty() => v.push(t.clone()),
+            _ => {}
+        }
+    }
+    v
+}
+
 /// Desenha o memorial completo.
 pub fn mostrar(ui: &mut egui::Ui, res: &Resultado) {
     let p = tema::de(ui);
