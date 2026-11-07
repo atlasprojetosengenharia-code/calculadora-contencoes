@@ -1,5 +1,10 @@
-# A cada envio (push) para a branch main: testa, compila o executável do
-# Windows e publica uma Release com o pacote .zip.
+# Publica uma nova versão SOMENTE quando você envia uma tag de versão
+# (ex.: git tag v0.3.0 && git push origin v0.3.0). Envios comuns para a
+# main NÃO publicam nada — eles só rodam os testes (veja testes.yml).
+#
+# A tag precisa ser igual a "v" + version do Cargo.toml; se não for, nada
+# é publicado. A release pública recebe a tag vX.Y.Z-build.N (formato que
+# o verificador de atualizações do programa entende).
 #
 # Distribuição pública sem expor o código:
 #   - o código fica neste repositório PRIVADO;
@@ -11,11 +16,7 @@ name: Compilar e publicar
 
 on:
   push:
-    branches: [main]
-    paths-ignore:
-      - "**.md"
-      - "distribuicao/**"
-  workflow_dispatch:
+    tags: ["v*"]
 
 permissions:
   contents: read
@@ -34,6 +35,15 @@ jobs:
     steps:
       - name: Baixar código
         uses: actions/checkout@v4
+
+      - name: Conferir tag x versão do Cargo.toml
+        shell: pwsh
+        run: |
+          $v = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          if ("${{ github.ref_name }}" -ne "v$v") {
+            Write-Error "A tag ${{ github.ref_name }} não corresponde à versão do Cargo.toml (v$v). Nada foi publicado."
+            exit 1
+          }
 
       - name: Instalar Rust
         uses: dtolnay/rust-toolchain@stable

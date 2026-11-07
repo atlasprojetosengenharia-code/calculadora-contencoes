@@ -1,0 +1,31 @@
+# Roda os testes a cada envio para a main. NÃO publica nada.
+# Serve só para avisar (aba Actions / e-mail do GitHub) se algo quebrou.
+name: Testes
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "distribuicao/**"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  testes:
+    runs-on: windows-latest
+    steps:
+      - name: Baixar código
+        uses: actions/checkout@v4
+
+      - name: Instalar Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache de compilação
+        uses: Swatinem/rust-cache@v2
+
+      - name: Testes
+        run: cargo test
