@@ -30,6 +30,10 @@ pub struct App {
     proj: Projeto,
     caminho: Option<PathBuf>,
     tem_sessao: bool,
+    /// Pasta com os PDFs de normas do usuário (Central de normas).
+    pasta_normas: Option<PathBuf>,
+    #[serde(skip)]
+    central_normas: bool,
     #[serde(skip)]
     tela: Tela,
     #[serde(skip)]
@@ -111,6 +115,22 @@ impl App {
         }
     }
 
+    fn abrir_manual(&mut self) {
+        self.msg = match crate::manual::abrir() {
+            Ok(c) => format!("Manual do usuário aberto: {}", c.display()),
+            Err(e) => format!("Erro ao abrir o manual: {e}"),
+        };
+    }
+
+    fn salvar_manual(&mut self) {
+        if let Some(r) = crate::manual::salvar_copia() {
+            self.msg = match r {
+                Ok(c) => format!("Manual salvo em {}", c.display()),
+                Err(e) => format!("Erro ao salvar o manual: {e}"),
+            };
+        }
+    }
+
     fn tela_projeto(&mut self, ctx: &egui::Context) {
         let p = tema::paleta(ctx.style().visuals.dark_mode);
 
@@ -131,6 +151,12 @@ impl App {
                         }
                         if ui.button("🏠 Início").clicked() {
                             self.tela = Tela::Inicio;
+                        }
+                        if ui.button("📚 Normas").on_hover_text("Central de normas ABNT").clicked() {
+                            self.central_normas = true;
+                        }
+                        if ui.button("📘 Manual").on_hover_text("Manual do usuário (PDF)").clicked() {
+                            self.abrir_manual();
                         }
                         ui.separator();
                         if ui.button("Salvar como…").clicked() {
@@ -157,6 +183,7 @@ impl App {
                     ui.label(RichText::new(&self.msg).small().color(p.fraco));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(RichText::new(format!("v{} · {}", sobre::versao_completa(), sobre::copyright())).small().color(p.fraco));
+                        ui.hyperlink_to(RichText::new(sobre::site_curto()).small(), sobre::SITE);
                         if let Some(c) = &self.caminho {
                             ui.label(RichText::new(format!("{}   ·", c.display())).small().color(p.fraco));
                         }
@@ -260,10 +287,18 @@ impl eframe::App for App {
                     ui::inicio::Acao::Novo => self.novo_projeto(),
                     ui::inicio::Acao::Abrir => self.abrir(),
                     ui::inicio::Acao::Continuar => self.tela = Tela::Projeto,
+                    ui::inicio::Acao::Manual => self.abrir_manual(),
+                    ui::inicio::Acao::SalvarManual => self.salvar_manual(),
+                    ui::inicio::Acao::Normas => self.central_normas = true,
                     ui::inicio::Acao::Nenhuma => {}
                 }
             }
             Tela::Projeto => self.tela_projeto(ctx),
+        }
+        if self.central_normas {
+            if let Some(m) = ui::normas_central::mostrar(ctx, &mut self.central_normas, &mut self.pasta_normas) {
+                self.msg = m;
+            }
         }
     }
 }

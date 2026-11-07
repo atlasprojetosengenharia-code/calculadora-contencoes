@@ -10,6 +10,9 @@ pub enum Acao {
     Novo,
     Abrir,
     Continuar,
+    Manual,
+    SalvarManual,
+    Normas,
 }
 
 pub fn mostrar(ctx: &egui::Context, sessao_anterior: Option<&str>, atualizacao: Option<&crate::atualizacao::Estado>) -> Acao {
@@ -20,10 +23,12 @@ pub fn mostrar(ctx: &egui::Context, sessao_anterior: Option<&str>, atualizacao: 
         .show(ctx, |ui| {
             let p = tema::de(ui);
             ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new("Desenvolvido por").color(p.fraco));
+                ui.label(RichText::new("Criado por").color(p.fraco));
                 ui.label(RichText::new(sobre::CRIADOR).strong());
                 ui.label(RichText::new("·").color(p.fraco));
-                ui.hyperlink_to(sobre::SITE.trim_start_matches("https://"), sobre::SITE);
+                ui.label(RichText::new(sobre::EMPRESA).strong());
+                ui.label(RichText::new("·").color(p.fraco));
+                ui.hyperlink_to(sobre::site_curto(), sobre::SITE);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     egui::widgets::global_theme_preference_switch(ui);
                     ui.label(RichText::new(sobre::copyright()).color(p.fraco));
@@ -57,6 +62,8 @@ pub fn mostrar(ctx: &egui::Context, sessao_anterior: Option<&str>, atualizacao: 
             ui.label(RichText::new(sobre::SUBTITULO).size(18.0).color(p.fraco));
             ui.add_space(8.0);
             ui.label(RichText::new(format!("Versão {}", sobre::versao_completa())).color(p.destaque).font(tema::fonte_forte(13.0)));
+            ui.add_space(4.0);
+            ui.label(RichText::new(format!("{} · {}", sobre::CRIADOR, sobre::EMPRESA)).size(13.5).color(p.texto));
             if let Some(e) = atualizacao {
                 ui.add_space(6.0);
                 crate::atualizacao::aviso(ui, e);
@@ -70,6 +77,19 @@ pub fn mostrar(ctx: &egui::Context, sessao_anterior: Option<&str>, atualizacao: 
                 ui.add_space(14.0);
                 if botao_secundario(ui, "Carregar projeto existente").clicked() {
                     acao = Acao::Abrir;
+                }
+            });
+            ui.add_space(12.0);
+            ui.allocate_ui_with_layout(egui::vec2(470.0, 30.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                if ui.button(RichText::new("📘 Manual do usuário (PDF)").size(14.0)).on_hover_text("Tutorial passo a passo: SPT, geometria, estabilidade, detalhamento e exportações").clicked() {
+                    acao = Acao::Manual;
+                }
+                if ui.small_button("Salvar PDF…").on_hover_text("Salvar uma cópia do manual").clicked() {
+                    acao = Acao::SalvarManual;
+                }
+                ui.add_space(10.0);
+                if ui.button(RichText::new("📚 Central de normas").size(14.0)).on_hover_text("Normas ABNT usadas nos cálculos").clicked() {
+                    acao = Acao::Normas;
                 }
             });
             if let Some(nome) = sessao_anterior {

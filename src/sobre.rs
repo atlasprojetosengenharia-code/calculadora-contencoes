@@ -14,9 +14,16 @@ pub fn versao_completa() -> String {
         None => format!("{VERSAO} (local)"),
     }
 }
-pub const CRIADOR: &str = "[Seu Nome / Empresa]";
-pub const SITE: &str = "https://www.seusite.com.br";
+/// Autoria do software.
+pub const CRIADOR: &str = "Eng. Civil Kaique Ferreira";
+pub const EMPRESA: &str = "Atlas Projetos e Engenharia LTDA";
+pub const SITE: &str = "https://www.atlasprojetos.eng.br";
 pub const ANO: &str = "2026";
+
+/// Endereço do site sem o protocolo (para exibição).
+pub fn site_curto() -> &'static str {
+    SITE.trim_start_matches("https://")
+}
 
 pub const NORMAS: [&str; 6] = [
     "ABNT NBR 11682:2009",
@@ -28,5 +35,5 @@ pub const NORMAS: [&str; 6] = [
 ];
 
 pub fn copyright() -> String {
-    format!("Copyright © {ANO} {CRIADOR}. Todos os direitos reservados.")
+    format!("Copyright © {ANO} {EMPRESA}. Todos os direitos reservados.")
 }

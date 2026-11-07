@@ -50,7 +50,7 @@ const CAMADAS: [(&str, u8); 18] = [
 ];
 
 /// Byte Windows-1252 de um caractere, se representável.
-fn cp1252(ch: char) -> Option<u8> {
+pub(crate) fn cp1252(ch: char) -> Option<u8> {
     let c = ch as u32;
     match ch {
         _ if c < 0x80 => Some(c as u8),
