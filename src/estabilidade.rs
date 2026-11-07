@@ -4,6 +4,7 @@
 //! Origem do sistema: ponta (bico) da base, x → para dentro do aterro, y ↑.
 
 use crate::empuxo::rad;
+use crate::normas;
 use crate::resultado::{fmt, Resultado, Verificacao};
 use crate::solo::SoloFundacao;
 use std::f64::consts::PI;
@@ -166,6 +167,13 @@ pub fn analisar(
     // Tombamento
     let fs_t = if m_inst > 0.0 { m_est / m_inst } else { f64::INFINITY };
     res.linha(format!("Momento estabilizante = {} kN·m/m ; instabilizante = {} kN·m/m", fmt(m_est), fmt(m_inst)));
+    res.norma(normas::NBR11682_TOMBAMENTO);
+    res.formula(
+        format!("Tombamento em torno da ponta ({caso})"),
+        "FS = ΣM_est / ΣM_inst",
+        format!("FS = {} / {}", fmt(m_est), fmt(m_inst)),
+        format!("FS = {}", fmt(fs_t)),
+    );
     res.verif(Verificacao::min(format!("FS tombamento — NBR 11682 Tab. 4 ({caso})"), fs_t, lim.tombamento, ""));
 
     // Deslizamento
@@ -177,6 +185,16 @@ pub fn analisar(
         "N = {} kN/m ; tan δb = {} ; adesão = {} kPa ; passivo = {} kN/m ; R = {} kN/m ; T = {} kN/m",
         fmt(n), fmt(tan_db), fmt(ca), fmt(r_pas), fmt(r), fmt(t)
     ));
+    res.norma(normas::NBR11682_DESLIZAMENTO);
+    res.formula(
+        format!("Deslizamento na base ({caso})"),
+        "FS = (N·tan δb + ca·B + Ep) / ΣH ;  δb = k·φ ;  ca = k·c",
+        format!(
+            "FS = ({}·{} + {}·{} + {}) / {}",
+            fmt(n.max(0.0)), fmt(tan_db), fmt(ca), fmt(b), fmt(r_pas), fmt(t)
+        ),
+        format!("R = {} kN/m ;  FS = {}", fmt(r), fmt(fs_d)),
+    );
     res.verif(Verificacao::min(format!("FS deslizamento na base — NBR 11682 Tab. 4 ({caso})"), fs_d, lim.deslizamento, ""));
 
     // Excentricidade
@@ -184,12 +202,29 @@ pub fn analisar(
     let e = b / 2.0 - x_r;
     let dist = DistribuicaoBase { b, n, x_r, e };
     res.linha(format!("Resultante a x = {} m da ponta ; e = {} m ; B/6 = {} m", fmt(x_r), fmt(e), fmt(b / 6.0)));
+    res.norma(normas::NBR11682_TERCO_CENTRAL);
+    res.formula(
+        format!("Excentricidade da resultante ({caso})"),
+        "x_R = ΣM_ponta / N ;  e = B/2 − x_R  ≤  B/6",
+        format!("x_R = {} / {} = {} m ;  e = {}/2 − {}", fmt(m_liq), fmt(n), fmt(x_r), fmt(b), fmt(x_r)),
+        format!("e = {} m  (B/6 = {} m)", fmt(e), fmt(b / 6.0)),
+    );
     res.verif(Verificacao::max(
         format!("Excentricidade |e| — terço central, NBR 11682 ({caso})"),
         e.abs(),
         lim.excentricidade * b,
         "m",
     ));
+    res.norma(normas::NBR6122_AREA_COMPRIMIDA);
+    res.formula(
+        format!("Tensões na base ({caso})"),
+        "σ = (N/B)·(1 ± 6e/B)  se |e| ≤ B/6 ;  σmáx = 2N / (3·x_R)  se |e| > B/6",
+        format!("σ = ({}/{})·(1 ± 6·{}/{})", fmt(n), fmt(b), fmt(e.abs()), fmt(b)),
+        format!(
+            "σmáx = {} kPa ;  σmín = {} kPa ;  comprimido = {} m de {} m",
+            fmt(dist.qmax()), fmt(dist.qmin()), fmt(dist.comprimento_comprimido()), fmt(b)
+        ),
+    );
     res.verif(Verificacao::min(
         format!("Área comprimida / B — NBR 6122 7.6.2 ({caso})"),
         dist.comprimento_comprimido() / b,
@@ -204,13 +239,38 @@ pub fn analisar(
     // Capacidade de carga
     let b_ef = (b - 2.0 * e.abs()).max(0.0);
     let alfa = if n > 0.0 { (h_liq.max(0.0) / n).atan() } else { PI / 2.0 };
-    let (qult, [nc, nq, ng]) = capacidade_carga(fund.phi, fund.c, fund.gamma, fund.gamma * df, b_ef, alfa);
+    let gamma_ng = fund.gamma_nq_gama(b_ef);
+    let q_sob = fund.sobrecarga_efetiva(df);
+    let (qult, [nc, nq, ng]) = capacidade_carga(fund.phi, fund.c, gamma_ng, q_sob, b_ef, alfa);
     let q_ef = if b_ef > 0.0 { n / b_ef } else { f64::INFINITY };
     let fs_c = if q_ef > 0.0 { qult / q_ef } else { f64::INFINITY };
+    if let Some(dw) = fund.na_abaixo_base {
+        res.linha(format!(
+            "NA a {} m {} da base → γ (parcela Nγ) = {} kN/m³ ; sobrecarga efetiva q = {} kPa",
+            fmt(dw.abs()),
+            if dw >= 0.0 { "abaixo" } else { "acima" },
+            fmt(gamma_ng),
+            fmt(q_sob)
+        ));
+    }
     res.linha(format!(
         "B' = {} m ; inclinação da carga = {}° ; Nc = {} ; Nq = {} ; Nγ = {} ; qult = {} kPa ; q' = N/B' = {} kPa",
         fmt(b_ef), fmt(alfa.to_degrees()), fmt(nc), fmt(nq), fmt(ng), fmt(qult), fmt(q_ef)
     ));
+    let phi_r = rad(fund.phi);
+    let ic = (1.0 - alfa / (PI / 2.0)).max(0.0).powi(2);
+    let ig = if phi_r > 1e-6 { (1.0 - alfa / phi_r).max(0.0).powi(2) } else { 0.0 };
+    res.norma(normas::NBR11682_CAPACIDADE);
+    res.norma(normas::NBR6122_FS_GLOBAL);
+    res.formula(
+        format!("Capacidade de carga — Meyerhof/Vesic com B' ({caso})"),
+        "q_ult = c·Nc·ic + q·Nq·iq + ½·γ·B'·Nγ·iγ ;  B' = B − 2|e| ;  FS = q_ult / (N/B')",
+        format!(
+            "q_ult = {}·{}·{} + {}·{}·{} + ½·{}·{}·{}·{}",
+            fmt(fund.c), fmt(nc), fmt(ic), fmt(q_sob), fmt(nq), fmt(ic), fmt(gamma_ng), fmt(b_ef), fmt(ng), fmt(ig)
+        ),
+        format!("q_ult = {} kPa ;  q' = {} kPa ;  FS = {}", fmt(qult), fmt(q_ef), fmt(fs_c)),
+    );
     res.verif(Verificacao::min(format!("FS capacidade de carga — NBR 11682 Tab. 4 / NBR 6122 ({caso})"), fs_c, lim.capacidade, ""));
     dist
 }

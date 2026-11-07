@@ -4,6 +4,7 @@
 use crate::concreto::{flexao_retangular, Concreto};
 use crate::empuxo::{rad, ParamEmpuxo};
 use crate::fatores::Fatores;
+use crate::normas;
 use crate::resultado::{fmt, Desenho, Estilo, Resultado, Verificacao};
 use crate::solo::{Cargas, Perfil};
 use serde::{Deserialize, Serialize};
@@ -172,6 +173,7 @@ impl SoloGrampeado {
             r.aviso("Nenhuma linha de grampos cabe na altura informada.");
         }
 
+        let sem = self.busca(&[], false, gm);
         // Estabilidade por cunhas
         r.titulo("Estabilidade — cunhas planas pelo pé");
         let crit = self.busca(&zs, false, gm);
@@ -179,17 +181,39 @@ impl SoloGrampeado {
             "Cunha crítica: ω = {}° com a horizontal ; FS = {}",
             fmt(crit.omega.to_degrees()), fmt(crit.fs)
         ));
+        r.norma(normas::NBR16920_ESTABILIDADE);
+        r.norma(normas::NBR11682_TAB3);
+        r.formula(
+            "Cunha plana pelo pé — busca do mínimo em ω",
+            "FS = [N·tan φ + c·L + Σ Tn·(cos(ω+i) + sen(ω+i)·tan φ)] / [(W + Q)·sen ω] ;  Tn = mín(π·D·Le·qs ; Rtd) / Sh",
+            format!(
+                "γ = {} kN/m³ ;  φ = {}° ;  c = {} kPa ;  q = {} kPa ;  {} linhas de grampos",
+                fmt(self.gamma), fmt(self.phi), fmt(self.c), fmt(self.cargas.q_uniforme), zs.len()
+            ),
+            format!("ω crítico = {}° ;  FS = {} (sem grampos: {})", fmt(crit.omega.to_degrees()), fmt(crit.fs), fmt(sem.fs)),
+        );
         r.verif(Verificacao::min("FS cunha crítica — estático (NBR 16920-2 Tab. B.3)", crit.fs, fat.fs_global(), ""));
         if self.cargas.usar_sismo {
             let cs = self.busca(&zs, true, gm);
             r.linha(format!("Sísmico: ω = {}° ; FS = {}", fmt(cs.omega.to_degrees()), fmt(cs.fs)));
             r.verif(Verificacao::min("FS cunha crítica — sísmico (NBR 11682 Tab. 3)", cs.fs, fat.fs_global(), ""));
         }
-        let sem = self.busca(&[], false, gm);
         r.linha(format!("Referência sem grampos: FS = {} (ω = {}°)", fmt(sem.fs), fmt(sem.omega.to_degrees())));
 
         // Grampos individuais
         r.titulo("Grampos — arrancamento e tração");
+        r.norma(normas::NBR16920_BARRA);
+        r.norma(normas::NBR16920_INTERNA);
+        r.formula(
+            "Resistências de um grampo",
+            "T = (Ka·σv − 2c·√Ka)·Sh·Sv ;  R_arr = π·D·Le·qs ;  Rtd = As·fyk / γm",
+            format!(
+                "Ka = {} ;  Sh·Sv = {}·{} ;  π·{}·Le·{} ;  Rtd = {} mm²·{} MPa / {}",
+                fmt(ka), fmt(self.sh), fmt(self.sv), fmt(self.diam_furo), fmt(self.qs),
+                fmt(self.area_barra_mm2()), fmt(self.fyk_barra), fmt(gm)
+            ),
+            format!("Rtd = {} kN ;  FS = R/T ≥ {}", fmt(rt), fmt(fat.fs_grampo_interna)),
+        );
         let mut t_max: f64 = 0.0;
         for (k, &z) in zs.iter().enumerate() {
             let sigma = perfil.sigma_v_ef(z) + self.cargas.q_uniforme;
@@ -223,16 +247,31 @@ impl SoloGrampeado {
                 "T0 na cabeça (Clouterre) = {} kN ; pressão na face = {} kPa ; M ≈ pS²/10 = {} kN·m/m ; As = {} cm²/m (mín. {})",
                 fmt(t0), fmt(p), fmt(m), fmt(f.as_calc), fmt(f.as_min)
             ));
+            r.formula(
+                "Face — carga na cabeça do grampo (Clouterre) e flexão",
+                "T0 = T_máx·(0,5 + (S − 0,5)/5) ;  p = T0/(Sh·Sv) ;  M = p·S²/10 ;  As = Md / (fyd·(d − y/2))",
+                format!("T0 = {}·(0,5 + ({} − 0,5)/5) ;  d = e/2 = {} cm", fmt(t_max), fmt(smax), fmt(d * 100.0)),
+                format!("T0 = {} kN ;  p = {} kPa ;  M = {} kN·m/m ;  As = {} cm²/m", fmt(t0), fmt(p), fmt(m), fmt(f.as_calc)),
+            );
+            r.norma(normas::NBR6118_FLEXAO);
             r.verif(Verificacao::max("Face: x/d", f.x_d, 0.45, ""));
             let dm = d * 1000.0;
             let u = 4.0 * self.placa * 1000.0 + 4.0 * PI * dm;
             let rho = (f.as_adotar() / 1e4 / d).min(0.02);
             let trd1 = crate::concreto::tau_rd1_puncao(d, rho, c.fck);
             let tsd = fat.gamma_f * t0 * 1000.0 / (u * dm);
+            r.norma(normas::NBR6118_PUNCAO);
+            r.formula(
+                "Face — punção da placa no contorno C'",
+                "u = 4·a + 4·π·d ;  τSd = γf·T0 / (u·d) ;  τRd1 = 0,13·(1 + √(20/d))·(100·ρ·fck)^(1/3)",
+                format!("γf·T0 = {}·{} kN ;  a = {} m ;  d = {} cm", fmt(fat.gamma_f), fmt(t0), fmt(self.placa), fmt(d * 100.0)),
+                format!("τSd = {} MPa ;  τRd1 = {} MPa", fmt(tsd), fmt(trd1)),
+            );
             r.verif(Verificacao::max("Face: punção na placa τSd ≤ τRd1", tsd, trd1, "MPa"));
         }
 
         self.cargas.avisar_minima(&mut r, fat.sobrecarga_minima);
+        r.norma(normas::NBR11682_SOBRECARGA);
         if perfil.usar_na {
             r.aviso("Água não considerada no solo grampeado.");
         }

@@ -120,3 +120,131 @@ pub fn pintar(ui: &mut egui::Ui, d: &Desenho, altura: f32) {
     painter.line_segment([base, fim], Stroke::new(2.0_f32, cor_texto));
     painter.text(fim + egui::vec2(6.0, 0.0), egui::Align2::LEFT_CENTER, format!("{passo} m"), egui::FontId::proportional(12.0), cor_texto);
 }
+
+/// Cor em notação CSS rgba().
+fn css(c: Color32) -> String {
+    format!("rgba({},{},{},{:.3})", c.r(), c.g(), c.b(), c.a() as f32 / 255.0)
+}
+
+fn esc(t: &str) -> String {
+    t.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
+/// Seção transversal como SVG autônomo (tema claro) — para o relatório HTML.
+pub fn svg(d: &Desenho, largura: f64, altura: f64) -> String {
+    let mut pts: Vec<[f64; 2]> = Vec::new();
+    for p in &d.poligonos {
+        pts.extend(&p.pontos);
+    }
+    for l in &d.linhas {
+        pts.extend(&l.pontos);
+    }
+    for (a, b) in &d.setas {
+        pts.push(*a);
+        pts.push(*b);
+    }
+    for t in &d.textos {
+        pts.push(t.pos);
+    }
+    pts.retain(|p| p[0].is_finite() && p[1].is_finite());
+    let mut s = format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {largura} {altura}" width="100%" role="img" aria-label="Seção transversal"><rect width="{largura}" height="{altura}" rx="6" fill="rgb(246,247,250)"/>"#
+    );
+    if pts.is_empty() {
+        s.push_str("</svg>");
+        return s;
+    }
+    let (mut x0, mut x1, mut y0, mut y1) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
+    for p in &pts {
+        x0 = x0.min(p[0]);
+        x1 = x1.max(p[0]);
+        y0 = y0.min(p[1]);
+        y1 = y1.max(p[1]);
+    }
+    let margem = 24.0;
+    let (w, h) = ((x1 - x0).max(1e-6), (y1 - y0).max(1e-6));
+    let k = ((largura - 2.0 * margem) / w).min((altura - 2.0 * margem) / h);
+    let (mx, my) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+    let tela = |p: [f64; 2]| (largura / 2.0 + (p[0] - mx) * k, altura / 2.0 - (p[1] - my) * k);
+    let lista = |v: &[[f64; 2]]| {
+        v.iter()
+            .map(|&q| {
+                let (x, y) = tela(q);
+                format!("{x:.1},{y:.1}")
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+
+    for p in &d.poligonos {
+        let (f, st) = cor(p.estilo, false);
+        let traco = if matches!(p.estilo, Estilo::Empuxo | Estilo::EmpuxoNegativo) {
+            r#"stroke="none""#.to_string()
+        } else {
+            format!(r#"stroke="{}" stroke-width="{}""#, css(st.color), st.width)
+        };
+        s.push_str(&format!(r#"<polygon points="{}" fill="{}" {traco}/>"#, lista(&p.pontos), css(f)));
+    }
+    for l in &d.linhas {
+        let (_, st) = cor(l.estilo, false);
+        let tr = if l.tracejada { r#" stroke-dasharray="8 5""# } else { "" };
+        s.push_str(&format!(
+            r#"<polyline points="{}" fill="none" stroke="{}" stroke-width="{}" stroke-linejoin="round"{tr}/>"#,
+            lista(&l.pontos),
+            css(st.color),
+            st.width
+        ));
+    }
+    let (_, sc) = cor(Estilo::Carga, false);
+    for (a, b) in &d.setas {
+        let (ax, ay) = tela(*a);
+        let (bx, by) = tela(*b);
+        let (dx, dy) = (bx - ax, by - ay);
+        let n = (dx * dx + dy * dy).sqrt().max(1e-6);
+        let (ux, uy) = (dx / n, dy / n);
+        let t = 6.0;
+        s.push_str(&format!(
+            r#"<line x1="{ax:.1}" y1="{ay:.1}" x2="{bx:.1}" y2="{by:.1}" stroke="{c}" stroke-width="{w}"/><polygon points="{bx:.1},{by:.1} {:.1},{:.1} {:.1},{:.1}" fill="{c}"/>"#,
+            bx - t * ux + 0.5 * t * uy,
+            by - t * uy - 0.5 * t * ux,
+            bx - t * ux - 0.5 * t * uy,
+            by - t * uy + 0.5 * t * ux,
+            c = css(sc.color),
+            w = sc.width
+        ));
+    }
+    for t in &d.textos {
+        let (x, y) = tela(t.pos);
+        s.push_str(&format!(
+            r#"<text x="{x:.1}" y="{y:.1}" font-size="12" text-anchor="middle" dominant-baseline="middle" fill="rgb(31,35,40)">{}</text>"#,
+            esc(&t.texto)
+        ));
+    }
+    let passo = [0.5, 1.0, 2.0, 5.0, 10.0, 20.0].into_iter().find(|&m| m * k > 60.0).unwrap_or(50.0);
+    let (bx, by) = (14.0, altura - 12.0);
+    s.push_str(&format!(
+        r#"<line x1="{bx}" y1="{by}" x2="{:.1}" y2="{by}" stroke="rgb(31,35,40)" stroke-width="2"/><text x="{:.1}" y="{by}" font-size="12" dominant-baseline="middle" fill="rgb(31,35,40)">{} m</text>"#,
+        bx + passo * k,
+        bx + passo * k + 6.0,
+        crate::resultado::fmt(passo)
+    ));
+    s.push_str("</svg>");
+    s
+}
+
+#[cfg(test)]
+mod testes {
+    use super::*;
+
+    #[test]
+    fn svg_basico() {
+        let mut d = Desenho::default();
+        d.retangulo(Estilo::Concreto, 0.0, 0.0, 1.0, 2.0);
+        d.tracejada(Estilo::Agua, vec![[0.0, 1.0], [2.0, 1.0]]);
+        d.seta([0.5, 3.0], [0.5, 2.0]);
+        d.texto([0.5, 1.0], "H = 2 m <x>");
+        let s = svg(&d, 400.0, 300.0);
+        assert!(s.starts_with("<svg") && s.ends_with("</svg>"));
+        assert!(s.contains("<polygon") && s.contains("stroke-dasharray") && s.contains("&lt;x&gt;"));
+    }
+}

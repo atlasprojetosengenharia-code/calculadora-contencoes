@@ -1,10 +1,11 @@
 //! Muro de flexão em concreto armado (perfil L / T invertido).
 
-use super::gravidade::{empuxo_no_plano, passivo_frontal, subpressao};
+use super::gravidade::{empuxo_no_plano, formula_empuxo, passivo_frontal, subpressao};
 use crate::concreto::{flexao_retangular, vrd1, Concreto};
 use crate::empuxo::{integrar, rad, ParamEmpuxo, Teoria};
 use crate::estabilidade::{analisar, centroide, Forca, LimitesFs};
 use crate::fatores::Fatores;
+use crate::normas;
 use crate::resultado::{fmt, Desenho, Estilo, Resultado, Verificacao};
 use crate::solo::{Cargas, Perfil, SoloFundacao};
 use serde::{Deserialize, Serialize};
@@ -97,6 +98,7 @@ impl MuroFlexao {
             base.push(Forca::nova("Solo sobre a ponta", 0.0, w, bp / 2.0, (self.df + hs) / 2.0));
         }
         if self.considerar_passivo {
+            r.norma(normas::NBR6122_PASSIVO);
             if let Some(p) = passivo_frontal(&self.fundacao, self.df, self.frac_passivo.min(1.0 / fat.reducao_passivo_muros.max(1.0))) {
                 base.push(p);
             }
@@ -114,10 +116,13 @@ impl MuroFlexao {
             "K ativo (camada superior) = {} ; Pa = {} kN/m ; inclinação = {}° ; altura do plano = {} m",
             fmt(est.k), fmt(est.pa), fmt(est.incl.to_degrees()), fmt(hv)
         ));
+        formula_empuxo(&mut r, &self.empuxo, &self.aterro, &self.cargas, 0.0, hv, &est);
+        // NA no solo de fundação: o mais alto entre o informado e o do aterro.
+        let fundacao = self.fundacao.com_na(self.aterro.na().map(|n| n - hv));
         let mut f = base.clone();
         f.extend(est.forcas.iter().cloned());
         let lim = LimitesFs::estatico(fat);
-        let dist = analisar(&mut r, "estático", &f, b, &self.fundacao, self.df, &lim);
+        let dist = analisar(&mut r, "estático", &f, b, &fundacao, self.df, &lim);
 
         if self.cargas.usar_sismo {
             let sis = empuxo_no_plano(&self.aterro, &self.cargas, &self.empuxo, 0.0, hv, &plano, true);
@@ -128,7 +133,7 @@ impl MuroFlexao {
             f.push(Forca::nova("Inércia da parede", kh * w_par, -kv * w_par, cx, cy));
             f.push(Forca::nova("Inércia do solo s/ talão", kh * w_solo, -kv * w_solo, sx, sy));
             let lim_s = LimitesFs::sismico(fat);
-            analisar(&mut r, "sísmico", &f, b, &self.fundacao, self.df, &lim_s);
+            analisar(&mut r, "sísmico", &f, b, &fundacao, self.df, &lim_s);
         }
 
         self.estrutural(&mut r, fat, &dist, hv);
@@ -191,6 +196,22 @@ impl MuroFlexao {
         if !fl.viavel {
             r.aviso(format!("{nome}: seção insuficiente (x/d > 0,45 ou Md excessivo) — aumentar espessura."));
         }
+        let fcd = crate::concreto::eta_c(c.fck) * c.fck / fat.gamma_c;
+        let fyd = c.fyk / fat.gamma_s;
+        r.norma(normas::NBR6118_FLEXAO);
+        r.norma(normas::NBR6118_AS_MIN);
+        r.formula(
+            format!("{nome} — flexão (b = 1 m)"),
+            "y = d·(1 − √(1 − 2·Md / (0,85·fcd·b·d²))) ;  x = y/0,8 ;  As = Md / (fyd·(d − y/2))",
+            format!(
+                "Md = {} kN·m ;  d = {} cm ;  fcd = {} MPa ;  fyd = {} MPa",
+                fmt(md.abs()), fmt(d * 100.0), fmt(fcd), fmt(fyd)
+            ),
+            format!(
+                "x/d = {} ;  As = {} cm²/m ;  As,mín = {} cm²/m → adotar {} cm²/m",
+                fmt(fl.x_d), fmt(fl.as_calc), fmt(fl.as_min), fmt(fl.as_adotar())
+            ),
+        );
         r.verif(Verificacao::max(format!("{nome}: x/d"), fl.x_d, 0.45, ""));
         r.verif(Verificacao::info(
             format!("{nome}: As calc. / As mín."),
@@ -198,6 +219,17 @@ impl MuroFlexao {
             &format!("cm²/m (mín. {})", fmt(fl.as_min)),
         ));
         let vr = vrd1(1.0, d, fl.as_adotar(), c.fck, fat.gamma_c);
+        let rho = (fl.as_adotar() / 1e4 / d).min(0.02);
+        r.norma(normas::NBR6118_CORTANTE);
+        r.formula(
+            format!("{nome} — cortante sem armadura transversal"),
+            "VRd1 = τRd·k·(1,2 + 40·ρ1)·bw·d ;  τRd = 0,25·fctd ;  fctd = 0,21·fck^(2/3)/γc",
+            format!(
+                "fck = {} MPa ;  k = {} ;  ρ1 = {} ;  d = {} m",
+                fmt(c.fck), fmt((1.6 - d).max(1.0)), format!("{:.4}", rho).replace('.', ","), fmt(d)
+            ),
+            format!("VRd1 = {} kN/m ;  Vd = {} kN/m", fmt(vr), fmt(vd.abs())),
+        );
         r.verif(Verificacao::max(format!("{nome}: Vd ≤ VRd1"), vd.abs(), vr, "kN/m"));
     }
 

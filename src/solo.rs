@@ -186,18 +186,102 @@ impl Cargas {
 
 /// Solo de fundação (abaixo da base de muros).
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SoloFundacao {
     pub gamma: f64,
+    /// Peso específico saturado (kN/m³) — usado abaixo do NA.
+    pub gamma_sat: f64,
     pub phi: f64,
     pub c: f64,
     /// Ângulo de atrito solo-base como fração de φ (tipicamente 2/3).
     pub frac_delta_base: f64,
     /// Adesão solo-base como fração de c.
     pub frac_adesao: f64,
+    /// Profundidade do NA abaixo da cota da base (m); ≤ 0 = NA na base ou
+    /// acima; `None` = sem água. Definido no cálculo, não é salvo.
+    #[serde(skip)]
+    pub na_abaixo_base: Option<f64>,
 }
 
 impl Default for SoloFundacao {
     fn default() -> Self {
-        Self { gamma: 19.0, phi: 30.0, c: 10.0, frac_delta_base: 2.0 / 3.0, frac_adesao: 0.5 }
+        Self {
+            gamma: 19.0,
+            gamma_sat: 20.0,
+            phi: 30.0,
+            c: 10.0,
+            frac_delta_base: 2.0 / 3.0,
+            frac_adesao: 0.5,
+            na_abaixo_base: None,
+        }
+    }
+}
+
+impl SoloFundacao {
+    /// Peso específico submerso γ' = γsat − γw.
+    pub fn gamma_sub(&self) -> f64 {
+        (self.gamma_sat - GAMMA_W).max(0.0)
+    }
+
+    /// γ efetivo para a parcela Nγ da capacidade de carga: γ' com o NA na base
+    /// ou acima; interpolação linear quando o NA está a menos de `b_ef` abaixo
+    /// da base; γ natural quando mais profundo ou sem água.
+    pub fn gamma_nq_gama(&self, b_ef: f64) -> f64 {
+        match self.na_abaixo_base {
+            None => self.gamma,
+            Some(dw) if dw <= 0.0 => self.gamma_sub(),
+            Some(dw) if b_ef > 0.0 && dw < b_ef => self.gamma_sub() + (dw / b_ef) * (self.gamma - self.gamma_sub()),
+            Some(_) => self.gamma,
+        }
+    }
+
+    /// Sobrecarga efetiva na cota da base devida ao solo à frente de altura
+    /// `df` (kPa), com o trecho abaixo do NA em γ'.
+    pub fn sobrecarga_efetiva(&self, df: f64) -> f64 {
+        let df = df.max(0.0);
+        let sub = match self.na_abaixo_base {
+            Some(dw) if dw < 0.0 => (-dw).min(df),
+            _ => 0.0,
+        };
+        self.gamma * (df - sub) + self.gamma_sub() * sub
+    }
+
+    /// Junta um NA vindo de outra fonte, mantendo o mais alto (crítico).
+    pub fn com_na(&self, outro: Option<f64>) -> Self {
+        let mut f = self.clone();
+        f.na_abaixo_base = match (self.na_abaixo_base, outro) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        f
+    }
+}
+
+#[cfg(test)]
+mod testes {
+    use super::*;
+
+    #[test]
+    fn fundacao_com_na() {
+        let mut f = SoloFundacao { gamma: 18.0, gamma_sat: 20.0, ..Default::default() };
+        // sem água
+        assert_eq!(f.gamma_nq_gama(2.0), 18.0);
+        assert_eq!(f.sobrecarga_efetiva(1.0), 18.0);
+        // NA na base → γ' = 10
+        f.na_abaixo_base = Some(0.0);
+        assert!((f.gamma_nq_gama(2.0) - 10.0).abs() < 1e-9);
+        // NA a 1 m abaixo, B' = 2 m → 10 + 0,5·(18 − 10) = 14
+        f.na_abaixo_base = Some(1.0);
+        assert!((f.gamma_nq_gama(2.0) - 14.0).abs() < 1e-9);
+        // NA mais fundo que B' → γ natural
+        f.na_abaixo_base = Some(3.0);
+        assert_eq!(f.gamma_nq_gama(2.0), 18.0);
+        // NA 0,4 m acima da base, df = 1 m → 18·0,6 + 10·0,4 = 14,8
+        f.na_abaixo_base = Some(-0.4);
+        assert!((f.sobrecarga_efetiva(1.0) - 14.8).abs() < 1e-9);
+        // com_na mantém o NA mais alto
+        let g = f.com_na(Some(-1.0));
+        assert_eq!(g.na_abaixo_base, Some(-1.0));
+        assert_eq!(SoloFundacao::default().com_na(None).na_abaixo_base, None);
     }
 }

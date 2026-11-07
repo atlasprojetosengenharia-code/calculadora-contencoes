@@ -9,7 +9,7 @@ use crate::drenagem::{Condicao, Drenagem, MaterialFiltro};
 use crate::empuxo::{ParamEmpuxo, Teoria};
 use crate::fatores::Fatores;
 use crate::projeto::{Projeto, TipoContencao, TIPOS_CONTENCAO};
-use crate::resultado::{fmt, Criterio, Resultado};
+use crate::resultado::{fmt, Resultado};
 use crate::solo::{Cargas, SoloFundacao};
 use crate::tipos::atirantada::{CortinaAtirantada, Diagrama};
 use crate::tipos::embutida::{Apoio, EstacaPrancha, ParedeEmbutida, ParedeEstacas};
@@ -90,21 +90,11 @@ pub fn mostrar(ui: &mut egui::Ui, proj: &mut Projeto, res: &Resultado) -> bool {
 
 pub fn lista_verificacoes(ui: &mut egui::Ui, res: &Resultado) {
     let p = tema::de(ui);
-    egui::Grid::new("verif_compacta").num_columns(3).striped(true).spacing([14.0, 4.0]).show(ui, |ui| {
+    egui::Grid::new("verif_compacta").num_columns(3).striped(true).spacing([12.0, 4.0]).show(ui, |ui| {
         for v in &res.verificacoes {
-            let (ic, cor) = match v.criterio {
-                Criterio::Info => ("•", p.fraco),
-                _ if v.ok() => ("✔", p.ok),
-                _ => ("✖", p.falha),
-            };
-            ui.label(RichText::new(ic).color(cor));
             ui.label(&v.nome);
-            let lim = match v.criterio {
-                Criterio::Minimo => format!("  (≥ {})", fmt(v.limite)),
-                Criterio::Maximo => format!("  (≤ {})", fmt(v.limite)),
-                Criterio::Info => String::new(),
-            };
-            ui.label(RichText::new(format!("{} {}{}", fmt(v.valor), v.unidade, lim)).color(cor));
+            ui.label(RichText::new(v.expressao()).color(super::memorial::cor_status(v, &p)));
+            super::memorial::etiqueta(ui, v);
             ui.end_row();
         }
     });

@@ -10,6 +10,8 @@ mod empuxo;
 mod estabilidade;
 mod fatores;
 mod materiais;
+mod memorial_html;
+mod normas;
 mod projeto;
 mod resultado;
 mod sobre;

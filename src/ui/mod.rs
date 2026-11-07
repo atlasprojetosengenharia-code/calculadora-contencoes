@@ -1,6 +1,7 @@
 pub mod contencao;
 pub mod fatores;
 pub mod inicio;
+pub mod memorial;
 pub mod resultados;
 pub mod spt;
 pub mod tema;

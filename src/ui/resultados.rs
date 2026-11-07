@@ -23,6 +23,25 @@ pub fn mostrar(ui: &mut egui::Ui, proj: &Projeto, res: &Resultado) -> Option<Str
             chip(ui, &format!("NÃO ATENDE — {n} verificação(ões)"), p.falha);
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.button("🌐 Exportar relatório (.html)").on_hover_text("Relatório visual com seção, fórmulas, normas e status — imprima ou salve em PDF pelo navegador").clicked() {
+                let nome = format!("memorial_{}.html", proj.tipo.arquivo());
+                if let Some(arq) = rfd::FileDialog::new()
+                    .set_title("Salvar relatório do memorial de cálculo")
+                    .set_file_name(&nome)
+                    .add_filter("Página HTML", &["html"])
+                    .save_file()
+                {
+                    let html = crate::memorial_html::gerar(res, &titulo_memorial, &crate::sobre::versao_completa());
+                    msg = Some(match std::fs::write(&arq, html) {
+                        Ok(_) => {
+                            // abre no navegador padrão
+                            let _ = std::process::Command::new("explorer").arg(&arq).spawn();
+                            format!("Relatório salvo em {}", arq.display())
+                        }
+                        Err(e) => format!("Erro ao salvar: {e}"),
+                    });
+                }
+            }
             if ui.button("💾 Exportar memorial (.txt)").clicked() {
                 let nome = format!("memorial_{}.txt", proj.tipo.arquivo());
                 if let Some(arq) = rfd::FileDialog::new()
@@ -70,10 +89,7 @@ pub fn mostrar(ui: &mut egui::Ui, proj: &Projeto, res: &Resultado) -> Option<Str
             egui::CollapsingHeader::new(RichText::new("Memorial de cálculo").font(tema::fonte_forte(16.0)))
                 .default_open(true)
                 .show(ui, |ui| {
-                    for l in &res.memorial {
-                        let t = RichText::new(l).monospace();
-                        ui.label(if l.starts_with("==") { t.color(p.destaque).strong() } else { t });
-                    }
+                    super::memorial::mostrar(ui, res);
                 });
         });
         ui.add_space(16.0);

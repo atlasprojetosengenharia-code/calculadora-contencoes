@@ -31,38 +31,82 @@ impl Verificacao {
     }
     pub fn ok(&self) -> bool {
         match self.criterio {
-            Criterio::Minimo => self.valor.is_finite() && self.valor >= self.limite - 1e-9,
+            // +∞ (sem esforço instabilizante) atende; NaN e −∞ não.
+            Criterio::Minimo => !self.valor.is_nan() && self.valor >= self.limite - 1e-9,
             Criterio::Maximo => self.valor.is_finite() && self.valor <= self.limite + 1e-9,
             Criterio::Info => true,
         }
     }
-    pub fn texto(&self) -> String {
-        let v = fmt(self.valor);
+    /// Símbolo de comparação do critério.
+    pub fn simbolo(&self) -> &'static str {
         match self.criterio {
-            Criterio::Minimo => format!(
-                "{}: {} {} (mín. {}) -> {}",
-                self.nome, v, self.unidade, fmt(self.limite), if self.ok() { "OK" } else { "NÃO ATENDE" }
-            ),
-            Criterio::Maximo => format!(
-                "{}: {} {} (máx. {}) -> {}",
-                self.nome, v, self.unidade, fmt(self.limite), if self.ok() { "OK" } else { "NÃO ATENDE" }
-            ),
-            Criterio::Info => format!("{}: {} {}", self.nome, v, self.unidade),
+            Criterio::Minimo => "≥",
+            Criterio::Maximo => "≤",
+            Criterio::Info => "=",
         }
+    }
+    /// Expressão da comparação, ex.: "1,65 ≥ 1,50" (ou só o valor, se informativa).
+    pub fn expressao(&self) -> String {
+        let u = if self.unidade.is_empty() { String::new() } else { format!(" {}", self.unidade) };
+        match self.criterio {
+            Criterio::Info => format!("{}{u}", fmt(self.valor)),
+            _ => format!("{}{u} {} {}{u}", fmt(self.valor), self.simbolo(), fmt(self.limite)),
+        }
+    }
+    /// Etiqueta de status: ATENDIDO / NÃO ATENDIDO / INFORMATIVO.
+    pub fn status(&self) -> &'static str {
+        match self.criterio {
+            Criterio::Info => "INFORMATIVO",
+            _ if self.ok() => "ATENDIDO",
+            _ => "NÃO ATENDIDO",
+        }
+    }
+    pub fn texto(&self) -> String {
+        format!("{}: {} → [ {} ]", self.nome, self.expressao(), self.status())
     }
 }
 
+/// Formata um número para o memorial, com vírgula decimal (padrão ABNT).
 pub fn fmt(v: f64) -> String {
     let v = if v.abs() < 0.005 { 0.0 } else { v };
-    if !v.is_finite() {
-        "∞".into()
+    let s = if !v.is_finite() {
+        return if v.is_nan() { "—".into() } else if v > 0.0 { "∞".into() } else { "−∞".into() };
     } else if v.abs() >= 1000.0 {
         format!("{v:.0}")
     } else if v.abs() >= 100.0 {
         format!("{v:.1}")
     } else {
         format!("{v:.2}")
-    }
+    };
+    s.replace('.', ",")
+}
+
+/// Fórmula do memorial: equação teórica → substituição → resultado.
+#[derive(Clone, Debug)]
+pub struct Formula {
+    pub titulo: String,
+    pub equacao: String,
+    pub substituicao: String,
+    pub resultado: String,
+}
+
+/// Referência normativa (síntese do requisito — ver `crate::normas`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RefNorma {
+    pub norma: &'static str,
+    pub item: &'static str,
+    pub requisito: &'static str,
+}
+
+/// Elemento do memorial de cálculo, na ordem em que aparece.
+#[derive(Clone, Debug)]
+pub enum Bloco {
+    Titulo(String),
+    Texto(String),
+    Formula(Formula),
+    Norma(RefNorma),
+    /// Índice em `Resultado::verificacoes`.
+    Verif(usize),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -180,22 +224,43 @@ impl Desenho {
 #[derive(Clone, Debug, Default)]
 pub struct Resultado {
     pub verificacoes: Vec<Verificacao>,
-    pub memorial: Vec<String>,
+    /// Memorial de cálculo estruturado.
+    pub blocos: Vec<Bloco>,
     pub avisos: Vec<String>,
     pub desenho: Desenho,
 }
 
 impl Resultado {
     pub fn titulo(&mut self, t: &str) {
-        self.memorial.push(String::new());
-        self.memorial.push(format!("== {t} =="));
+        self.blocos.push(Bloco::Titulo(t.into()));
     }
     pub fn linha(&mut self, t: impl Into<String>) {
-        self.memorial.push(t.into());
+        self.blocos.push(Bloco::Texto(t.into()));
     }
     pub fn verif(&mut self, v: Verificacao) {
-        self.memorial.push(format!("  {}", v.texto()));
         self.verificacoes.push(v);
+        self.blocos.push(Bloco::Verif(self.verificacoes.len() - 1));
+    }
+    /// Fórmula em três passos: equação teórica, substituição e resultado.
+    pub fn formula(
+        &mut self,
+        titulo: impl Into<String>,
+        equacao: impl Into<String>,
+        substituicao: impl Into<String>,
+        resultado: impl Into<String>,
+    ) {
+        self.blocos.push(Bloco::Formula(Formula {
+            titulo: titulo.into(),
+            equacao: equacao.into(),
+            substituicao: substituicao.into(),
+            resultado: resultado.into(),
+        }));
+    }
+    /// Caixa de referência normativa (cada referência aparece uma única vez).
+    pub fn norma(&mut self, r: RefNorma) {
+        if !self.blocos.iter().any(|b| matches!(b, Bloco::Norma(x) if *x == r)) {
+            self.blocos.push(Bloco::Norma(r));
+        }
     }
     pub fn aviso(&mut self, t: impl Into<String>) {
         self.avisos.push(t.into());
@@ -203,24 +268,84 @@ impl Resultado {
     pub fn atende(&self) -> bool {
         self.verificacoes.iter().all(|v| v.ok())
     }
+
+    /// Memorial em texto puro (copiar / exportar .txt).
     pub fn texto_completo(&self, titulo: &str) -> String {
-        let mut s = format!("CALCULADORA DE CONTENÇÕES — {titulo}\n");
-        s.push_str(&"=".repeat(60));
-        s.push('\n');
-        for l in &self.memorial {
-            s.push_str(l);
-            s.push('\n');
+        use std::fmt::Write;
+        let mut s = String::new();
+        let _ = writeln!(s, "CALCULADORA DE CONTENÇÕES — {titulo}");
+        let _ = writeln!(s, "{}", "=".repeat(72));
+        for b in &self.blocos {
+            let _ = match b {
+                Bloco::Titulo(t) => writeln!(s, "\n== {t} =="),
+                Bloco::Texto(t) => writeln!(s, "{t}"),
+                Bloco::Formula(f) => {
+                    let _ = writeln!(s, "  ┌─ {}", f.titulo);
+                    let _ = writeln!(s, "  │ Equação:      {}", f.equacao);
+                    if !f.substituicao.is_empty() {
+                        let _ = writeln!(s, "  │ Substituição: {}", f.substituicao);
+                    }
+                    writeln!(s, "  └ Resultado:    {}", f.resultado)
+                }
+                Bloco::Norma(n) => writeln!(s, "  ▌ {} — {}\n  ▌ {}", n.norma, n.item, n.requisito),
+                Bloco::Verif(i) => writeln!(s, "  {}", self.verificacoes[*i].texto()),
+            };
         }
-        s.push_str("\n== RESUMO DAS VERIFICAÇÕES ==\n");
+        let _ = writeln!(s, "\n== RESUMO DAS VERIFICAÇÕES ==");
         for v in &self.verificacoes {
-            s.push_str(&format!("  {}\n", v.texto()));
+            let _ = writeln!(s, "  {}", v.texto());
         }
         if !self.avisos.is_empty() {
-            s.push_str("\n== AVISOS ==\n");
+            let _ = writeln!(s, "\n== AVISOS ==");
             for a in &self.avisos {
-                s.push_str(&format!("  - {a}\n"));
+                let _ = writeln!(s, "  - {a}");
             }
         }
+        let _ = writeln!(s, "\nReferências normativas: sínteses dos requisitos — consulte o texto integral das normas ABNT.");
         s
+    }
+}
+
+#[cfg(test)]
+mod testes {
+    use super::*;
+
+    #[test]
+    fn fs_infinito_atende() {
+        // FS = ∞ (sem esforço instabilizante) atende a um mínimo
+        assert!(Verificacao::min("FS", f64::INFINITY, 1.5, "").ok());
+        assert!(!Verificacao::min("FS", f64::NAN, 1.5, "").ok());
+        assert!(!Verificacao::min("FS", f64::NEG_INFINITY, 1.5, "").ok());
+        assert!(!Verificacao::min("FS", 1.49, 1.5, "").ok());
+        // em um máximo, ∞ continua reprovando (ex.: seção insuficiente)
+        assert!(!Verificacao::max("taxa", f64::INFINITY, 4.0, "%").ok());
+    }
+
+    #[test]
+    fn expressao_e_status() {
+        let v = Verificacao::min("FS deslizamento", 1.65, 1.5, "");
+        assert_eq!(v.expressao(), "1,65 ≥ 1,50");
+        assert_eq!(v.status(), "ATENDIDO");
+        assert_eq!(v.texto(), "FS deslizamento: 1,65 ≥ 1,50 → [ ATENDIDO ]");
+        let v = Verificacao::max("e", 0.4, 0.3, "m");
+        assert_eq!(v.expressao(), "0,40 m ≤ 0,30 m");
+        assert_eq!(v.status(), "NÃO ATENDIDO");
+        assert_eq!(fmt(1234.6), "1235");
+        assert_eq!(fmt(f64::INFINITY), "∞");
+    }
+
+    #[test]
+    fn blocos_na_ordem_e_norma_sem_repeticao() {
+        let mut r = Resultado::default();
+        let n = RefNorma { norma: "NBR X", item: "1", requisito: "req" };
+        r.titulo("T");
+        r.norma(n);
+        r.formula("F", "a = b", "a = 1", "a = 1 m");
+        r.verif(Verificacao::min("FS", 2.0, 1.5, ""));
+        r.norma(n);
+        assert_eq!(r.blocos.len(), 4);
+        assert!(matches!(r.blocos[3], Bloco::Verif(0)));
+        let t = r.texto_completo("x");
+        assert!(t.contains("Substituição: a = 1") && t.contains("[ ATENDIDO ]"));
     }
 }

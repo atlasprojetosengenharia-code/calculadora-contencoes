@@ -4,6 +4,7 @@
 use crate::concreto::{flexao_retangular, Concreto};
 use crate::empuxo::{integrar, rad, ParamEmpuxo, Teoria};
 use crate::fatores::Fatores;
+use crate::normas;
 use crate::resultado::{fmt, Desenho, Estilo, Resultado, Verificacao};
 use crate::solo::{Cargas, Perfil};
 use serde::{Deserialize, Serialize};
@@ -98,6 +99,40 @@ impl CortinaAtirantada {
         solo + self.perfil.u(z) + self.cargas.pressao_faixa(z) + sis
     }
 
+    /// Esforços na ficha (kN/m), entre H e H + ficha: (passivo característico
+    /// à frente, ações atrás da ficha). As ações atrás = empuxo ativo teórico
+    /// (componente horizontal) + água atrás − água à frente + carga em faixa.
+    /// NA à frente: o do perfil, rebaixado no mínimo até o fundo da escavação.
+    fn esforcos_ficha(&self) -> (f64, f64) {
+        let h = self.h;
+        let na_frente = self.perfil.na().map(|n| n.max(h));
+        let dp = if self.empuxo.teoria == Teoria::Coulomb { self.delta_passivo } else { 0.0 };
+        let pp = integrar(
+            |z| {
+                let c = self.perfil.camada_em(z);
+                let kp = self.empuxo.coef_passivo(c.phi, dp);
+                let sv = self.perfil.sigma_v_ef_desde(h, z, na_frente);
+                (kp * sv + 2.0 * c.c * kp.sqrt()) * rad(dp).cos()
+            },
+            h,
+            h + self.ficha,
+            200,
+        )
+        .0;
+        let u_frente = |z: f64| match na_frente {
+            Some(zw) if z > zw => crate::solo::GAMMA_W * (z - zw),
+            _ => 0.0,
+        };
+        let ativo = integrar(
+            |z| self.empuxo.pressao_horizontal_total(&self.perfil, &self.cargas, 0.0, z) - u_frente(z),
+            h,
+            h + self.ficha,
+            200,
+        )
+        .0;
+        (pp, ativo)
+    }
+
     pub fn calcular(&self, fat: &Fatores) -> Resultado {
         let mut r = Resultado::default();
         let h = self.h;
@@ -133,6 +168,23 @@ impl CortinaAtirantada {
             },
             fmt(pa_h)
         ));
+
+        r.norma(normas::NBR11682_SOBRECARGA);
+        if self.diagrama == Diagrama::Aparente {
+            r.formula(
+                "Envoltória aparente de pressões (Terzaghi-Peck)",
+                "p = 1,3·Pa,h / H ;  Pa,h = ∫₀ᴴ (Ka·σ'v + Ka·q − 2c'·√Ka)·cos i dz",
+                format!("p = 1,3·{} / {}", fmt(pa_h), fmt(h)),
+                format!("p = {} kPa (constante; água e carga em faixa somadas à parte)", fmt(p_ap)),
+            );
+        } else {
+            r.formula(
+                "Empuxo ativo teórico",
+                "Pa,h = ∫₀ᴴ (Ka·σ'v + Ka·q − 2c'·√Ka)·cos i dz",
+                format!("H = {} m ;  q = {} kPa", fmt(h), fmt(self.cargas.q_uniforme)),
+                format!("Pa,h = {} kN/m", fmt(pa_h)),
+            );
+        }
 
         // casos
         let mut dps = vec![("estático", 0.0)];
@@ -188,6 +240,15 @@ impl CortinaAtirantada {
             "Bulbo: L = {} · Ft / (π · D · qs) (B.2.4.1) ; trecho livre ≥ {} m (B.2.7)",
             fmt(fat.fs_tirante_bulbo()), fmt(fat.tirante_livre_min())
         ));
+        r.norma(normas::NBR5629_ACO);
+        r.formula(
+            "Carga admissível do aço do tirante",
+            "T_adm = 0,9·fyk·As / FS",
+            format!("T_adm = 0,9·{} MPa·{} cm² / {}", fmt(self.fyk_tirante), fmt(self.area_aco), fmt(fs_aco)),
+            format!("fyk·As = {} kN ;  T_adm = {} kN", fmt(rt), fmt(t_adm)),
+        );
+        r.norma(normas::NBR5629_BULBO);
+        r.norma(normas::NBR5629_TRECHO_LIVRE);
         for (i, &z) in niveis.iter().enumerate() {
             let carga = f_m[i] * self.espac_h / incl.cos();
             let t_corte = (h - z) / (incl.sin() + incl.cos() * rho.tan());
@@ -198,6 +259,19 @@ impl CortinaAtirantada {
                 "Tirante {}: z = {} m ; carga de trabalho Ft = {} kN ; L livre = {} m ; L bulbo = {} m ; L total = {} m",
                 i + 1, fmt(z), fmt(carga), fmt(l_livre), fmt(l_bulbo), fmt(l_livre + l_bulbo)
             ));
+            r.formula(
+                format!("Tirante {} (z = {} m)", i + 1, fmt(z)),
+                "Ft = F·s / cos i ;  L_bulbo = FS·Ft / (π·D·qs) ;  L_livre = t_cunha + folga ≥ L_mín",
+                format!(
+                    "Ft = {}·{} / cos {}° ;  L_bulbo = {}·Ft / (π·{}·{})",
+                    fmt(f_m[i]), fmt(self.espac_h), fmt(self.inclinacao), fmt(fat.fs_tirante_bulbo()),
+                    fmt(self.diam_furo), fmt(self.qs)
+                ),
+                format!(
+                    "Ft = {} kN ;  L_livre = {} m ;  L_bulbo = {} m ;  L_total = {} m",
+                    fmt(carga), fmt(l_livre), fmt(l_bulbo), fmt(l_livre + l_bulbo)
+                ),
+            );
             r.verif(Verificacao::max(format!("Tirante {}: Ft ≤ 0,9·fyk·As/{}", i + 1, fmt(fs_aco)), carga, t_adm, "kN"));
             tirantes.push(Tirante { z, f_m: f_m[i], carga, l_livre, l_bulbo });
         }
@@ -209,6 +283,13 @@ impl CortinaAtirantada {
             "Ensaios de recebimento (Tab. D.1): tipo {ta} (≥10% dos tirantes) até {fa}·Ft = {} kN ; tipo {tb} (demais) até {fb}·Ft = {} kN",
             fmt(fa * t_max), fmt(fb * t_max)
         ));
+        r.norma(normas::NBR5629_ENSAIOS);
+        r.formula(
+            "Carga máxima de ensaio de recebimento",
+            "P_ensaio = f·Ft,máx ≤ 0,9·fyk·As",
+            format!("P_ensaio = {}·{}", fmt(fa), fmt(t_max)),
+            format!("P_ensaio = {} kN ;  0,9·fyk·As = {} kN", fmt(fa * t_max), fmt(0.9 * rt)),
+        );
         r.verif(Verificacao::max(
             format!("Carga máx. de ensaio ({fa}·Ft) ≤ 0,9·fyk·As (D.3.4)"),
             fa * t_max,
@@ -222,21 +303,23 @@ impl CortinaAtirantada {
         r.titulo("Ficha / apoio na base");
         if self.ficha > 0.0 {
             let fs_p = fat.fs_passivo.max(1.0);
-            let dp = if self.empuxo.teoria == Teoria::Coulomb { self.delta_passivo } else { 0.0 };
-            let pp = integrar(
-                |z| {
-                    let c = self.perfil.camada_em(z);
-                    let kp = self.empuxo.coef_passivo(c.phi, dp);
-                    let sv = self.perfil.sigma_v_ef_desde(h, z, self.perfil.na().map(|n| n.max(h)));
-                    (kp * sv + 2.0 * c.c * kp.sqrt()) * rad(dp).cos()
-                },
-                h,
-                h + self.ficha,
-                200,
-            )
-            .0;
-            r.linha(format!("Passivo na ficha = {} kN/m ; reduzido (÷{}) = {} kN/m", fmt(pp), fmt(fs_p), fmt(pp / fs_p)));
-            r.verif(Verificacao::min("Passivo reduzido ≥ reação na base", pp / fs_p, r_base, "kN/m"));
+            let (pp, ativo) = self.esforcos_ficha();
+            let disponivel = pp / fs_p - ativo;
+            r.linha(format!(
+                "Passivo na ficha = {} kN/m ; reduzido (÷{}) = {} kN/m",
+                fmt(pp), fmt(fs_p), fmt(pp / fs_p)
+            ));
+            r.linha(format!(
+                "Ativo + água líquida + faixa atrás da ficha = {} kN/m ; resistência disponível = {} kN/m",
+                fmt(ativo), fmt(disponivel)
+            ));
+            r.formula(
+                "Equilíbrio da ficha",
+                "R_disp = Ep / FS_p − (Ea + Uatrás − Ufrente + faixa)  ≥  R_base",
+                format!("R_disp = {} / {} − {}", fmt(pp), fmt(fs_p), fmt(ativo)),
+                format!("R_disp = {} kN/m ;  R_base = {} kN/m", fmt(disponivel), fmt(r_base)),
+            );
+            r.verif(Verificacao::min("Passivo reduzido − ativo na ficha ≥ reação na base", disponivel, r_base, "kN/m"));
         } else {
             r.aviso("Sem ficha: a reação na base deve ser resistida por apoio em rocha/viga de coroamento.");
         }
@@ -281,6 +364,14 @@ impl CortinaAtirantada {
                 "Direção {nome}: M ≈ pL²/10 = {} kN·m/m ; Md = {} ; As = {} cm²/m (mín. {})",
                 fmt(m), fmt(md), fmt(f.as_calc), fmt(f.as_min)
             ));
+            r.norma(normas::NBR6118_FLEXAO);
+            r.norma(normas::NBR6118_AS_MIN);
+            r.formula(
+                format!("Painel — direção {nome}"),
+                "M = p·L²/10 (vão) ou p·a²/2 (balanço) ;  Md = γf·M ;  As = Md / (fyd·(d − y/2))",
+                format!("p = {} kPa ;  Md = {}·{} ;  d = {} cm", fmt(p_max), fmt(fat.gamma_f), fmt(m), fmt(d * 100.0)),
+                format!("Md = {} kN·m/m ;  x/d = {} ;  As = {} cm²/m (mín. {})", fmt(md), fmt(f.x_d), fmt(f.as_calc), fmt(f.as_min)),
+            );
             r.verif(Verificacao::max(format!("Painel {nome}: x/d"), f.x_d, 0.45, ""));
             as_ad[k] = f.as_adotar();
         }
@@ -295,6 +386,13 @@ impl CortinaAtirantada {
             "Punção: FSd = {} kN ; u = {} m ; τSd = {} MPa ; τRd1 = {} MPa",
             fmt(fsd), fmt(u / 1000.0), fmt(tsd), fmt(trd1)
         ));
+        r.norma(normas::NBR6118_PUNCAO);
+        r.formula(
+            "Punção da placa de ancoragem no contorno C'",
+            "u = 4·a + 4·π·d ;  τSd = FSd / (u·d) ;  τRd1 = 0,13·(1 + √(20/d))·(100·ρ·fck)^(1/3)",
+            format!("FSd = {}·{}·cos {}° ;  a = {} m ;  d = {} cm", fmt(fat.gamma_f), fmt(t_max), fmt(self.inclinacao), fmt(self.placa), fmt(d * 100.0)),
+            format!("u = {} m ;  τSd = {} MPa ;  τRd1 = {} MPa", fmt(u / 1000.0), fmt(tsd), fmt(trd1)),
+        );
         r.verif(Verificacao::max("Punção na placa: τSd ≤ τRd1", tsd, trd1, "MPa"));
     }
 
@@ -351,5 +449,31 @@ impl CortinaAtirantada {
         d.texto([-self.espessura - 0.2 * h, 0.05 * h], format!("p máx = {} kPa", fmt(pmax)));
         d.texto([xi * 0.7, -h * 0.5], format!("H = {} m", fmt(h)));
         d
+    }
+}
+
+#[cfg(test)]
+mod testes {
+    use super::*;
+
+    #[test]
+    fn ficha_desconta_ativo() {
+        // Rankine φ=30°, γ=19, c=0, q=20, sem água, H=8, ficha=1:
+        // ativo = Ka·∫(19z + 20)dz [8;9] = (161,5 + 20)/3 = 60,5 kN/m
+        // passivo = Kp·∫19(z − 8)dz [8;9] = 3·9,5 = 28,5 kN/m
+        let mut c = CortinaAtirantada::default();
+        c.perfil.camadas[0].c = 0.0;
+        c.cargas.q_uniforme = 20.0;
+        c.empuxo.teoria = Teoria::Rankine;
+        c.h = 8.0;
+        c.ficha = 1.0;
+        let (pp, ativo) = c.esforcos_ficha();
+        assert!((ativo - 60.5).abs() < 0.05, "ativo = {ativo}");
+        assert!((pp - 28.5).abs() < 0.05, "passivo = {pp}");
+        // a verificação usa passivo reduzido − ativo
+        let r = c.calcular(&Fatores::default());
+        let v = r.verificacoes.iter().find(|v| v.nome.starts_with("Passivo reduzido")).unwrap();
+        assert!((v.valor - (28.5 / 2.0 - 60.5)).abs() < 0.1, "{}", v.valor);
+        assert!(!v.ok());
     }
 }

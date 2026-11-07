@@ -20,6 +20,7 @@
 use crate::empuxo::{integrar, rad, ParamEmpuxo, Teoria};
 use crate::estabilidade::{analisar, centroide, Forca, LimitesFs};
 use crate::fatores::Fatores;
+use crate::normas;
 use crate::resultado::{fmt, Desenho, Estilo, Resultado, Verificacao};
 use crate::solo::{Cargas, Perfil, SoloFundacao, GAMMA_W};
 use serde::{Deserialize, Serialize};
@@ -191,6 +192,55 @@ pub fn empuxo_no_plano(
     EmpuxoNoPlano { forcas, pa, incl, k, diagrama }
 }
 
+/// Fórmulas do coeficiente de empuxo ativo e da resultante Pa (memorial).
+pub fn formula_empuxo(
+    r: &mut Resultado,
+    emp: &ParamEmpuxo,
+    aterro: &Perfil,
+    cargas: &Cargas,
+    theta: f64,
+    hv: f64,
+    est: &EmpuxoNoPlano,
+) {
+    let cam = aterro.camada_em(0.0);
+    let (eq, sub) = match emp.teoria {
+        Teoria::Rankine if emp.beta.abs() < 1e-9 => (
+            "Ka = tan²(45° − φ/2)".to_string(),
+            format!("Ka = tan²(45° − {}°/2)", fmt(cam.phi)),
+        ),
+        Teoria::Rankine => (
+            "Ka = cos β·(cos β − √(cos²β − cos²φ)) / (cos β + √(cos²β − cos²φ))".to_string(),
+            format!("φ = {}° ;  β = {}°", fmt(cam.phi), fmt(emp.beta)),
+        ),
+        Teoria::Coulomb => (
+            "Ka = cos²(φ−θ) / [cos²θ·cos(δ+θ)·(1 + √(sin(φ+δ)·sin(φ−β) / (cos(δ+θ)·cos(θ−β))))²]".to_string(),
+            format!(
+                "φ = {}° ;  δ = {}° ;  θ = {}° ;  β = {}°",
+                fmt(cam.phi), fmt(emp.delta), fmt(theta.to_degrees()), fmt(emp.beta)
+            ),
+        ),
+    };
+    r.formula(
+        format!("Coeficiente de empuxo ativo — {} (camada superior)", emp.teoria.nome()),
+        eq,
+        sub,
+        format!("Ka = {}", fmt(est.k)),
+    );
+    r.norma(normas::NBR11682_SOBRECARGA);
+    r.formula(
+        "Empuxo ativo resultante (solo + sobrecarga)",
+        "Pa = ∫₀ᴴ (Ka·σ'v + Ka·q − 2c'·√Ka) dz ;  Ph = Pa·cos i ;  Pv = Pa·sen i",
+        format!(
+            "H = {} m ;  γ = {} kN/m³ ;  q = {} kPa ;  c' = {} kPa ;  i = {}°",
+            fmt(hv), fmt(aterro.gamma_medio(hv)), fmt(cargas.q_uniforme), fmt(cam.c), fmt(est.incl.to_degrees())
+        ),
+        format!(
+            "Pa = {} kN/m ;  Ph = {} kN/m ;  Pv = {} kN/m",
+            fmt(est.pa), fmt(est.pa * est.incl.cos()), fmt(est.pa * est.incl.sin())
+        ),
+    );
+}
+
 /// Subpressão triangular sob a base (NA no aterro, sem água à frente).
 pub fn subpressao(aterro: &Perfil, hv: f64, b: f64) -> Option<Forca> {
     let hw = hv - aterro.na()?;
@@ -282,6 +332,13 @@ impl MuroGravidade {
         let pw = self.poligono();
         let (area, cx, cy) = centroide(&pw);
         let w = area * self.material.peso();
+        r.norma(normas::NBR6120_PESOS);
+        r.formula(
+            "Peso próprio do muro",
+            "W = A·γ_muro",
+            format!("W = {} m²·{} kN/m³", fmt(area), fmt(self.material.peso())),
+            format!("W = {} kN/m  (centróide x = {} m ; y = {} m)", fmt(w), fmt(cx), fmt(cy)),
+        );
         let mut base = vec![Forca::nova("Peso próprio do muro", 0.0, w, cx, cy)];
 
         // Plano de cálculo: reta do canto posterior da base (b, 0) ao canto
@@ -308,8 +365,19 @@ impl MuroGravidade {
             base.push(Forca::nova("Solo sobre o tardoz / ressalto", 0.0, a_solo * peso, xs, ys));
             cunha = Some((a_solo * peso, xs, ys));
         }
+        if self.empuxo.teoria == Teoria::Coulomb
+            && a_solo > 1e-6
+            && (self.empuxo.delta - self.empuxo.beta).abs() > 1e-6
+        {
+            r.aviso("Coulomb: o plano de cálculo (calcanhar → crista) passa pelo solo sobre o tardoz/ressalto — nesse trecho solo-solo recomenda-se δ = β.");
+        }
+
+        // NA no solo de fundação: o mais alto entre o informado e o do aterro
+        // (profundidade do NA no plano de cálculo − altura do plano).
+        let fundacao = self.fundacao.com_na(self.aterro.na().map(|n| n - hv));
 
         if self.considerar_passivo {
+            r.norma(normas::NBR6122_PASSIVO);
             if let Some(p) =
                 passivo_frontal(&self.fundacao, self.df, self.frac_passivo.min(1.0 / fat.reducao_passivo_muros.max(1.0)))
             {
@@ -329,9 +397,10 @@ impl MuroGravidade {
             "θ do plano = {}° ; K ativo (camada superior) = {} ; Pa = {} kN/m ; inclinação = {}°",
             fmt(theta.to_degrees()), fmt(est.k), fmt(est.pa), fmt(est.incl.to_degrees())
         ));
+        formula_empuxo(&mut r, &self.empuxo, &self.aterro, &self.cargas, theta, hv, &est);
         let mut f_est = base.clone();
         f_est.extend(est.forcas.iter().cloned());
-        analisar(&mut r, "estático", &f_est, b, &self.fundacao, self.df, &LimitesFs::estatico(fat));
+        analisar(&mut r, "estático", &f_est, b, &fundacao, self.df, &LimitesFs::estatico(fat));
 
         // Caso sísmico
         if self.cargas.usar_sismo {
@@ -343,11 +412,12 @@ impl MuroGravidade {
             if let Some((ws, xs, ys)) = cunha {
                 f.push(Forca::nova("Inércia do solo s/ tardoz", kh * ws, -kv * ws, xs, ys));
             }
-            analisar(&mut r, "sísmico", &f, b, &self.fundacao, self.df, &LimitesFs::sismico(fat));
+            analisar(&mut r, "sísmico", &f, b, &fundacao, self.df, &LimitesFs::sismico(fat));
         }
 
         self.secoes_internas(&mut r, hv, theta);
 
+        self.cargas.avisar_minima(&mut r, fat.sobrecarga_minima);
         if self.material == Material::Gabiao || self.material == Material::PedraSeca {
             r.aviso("Gabião/pedra seca: verificar também o deslizamento entre camadas e a especificação das telas/pedras.");
         }
@@ -407,6 +477,12 @@ impl MuroGravidade {
             pior_comp = pior_comp.max(smax);
             pior_tracao = pior_tracao.min(smin);
         }
+        r.formula(
+            "Tensões nas seções horizontais do corpo",
+            "σ = (N/b)·(1 ± 6e/b)  (|e| ≤ b/6) ;  σmáx = 2N / (3·x_R)  (|e| > b/6)",
+            "N = peso do corpo acima da seção + Pv ;  e = b/2 − ΣM/N",
+            format!("σmáx = {} MPa ;  σmín = {} MPa", fmt(pior_comp / 1000.0), fmt(pior_tracao / 1000.0)),
+        );
         r.verif(Verificacao::max("Compressão máx. no corpo", pior_comp / 1000.0, self.sigma_adm, "MPa"));
         r.verif(Verificacao::min("Tensão mín. no corpo (tração)", pior_tracao / 1000.0, -self.tracao_adm, "MPa"));
     }
@@ -499,6 +575,39 @@ mod testes {
         let fs = |nome: &str| r.verificacoes.iter().find(|v| v.nome.starts_with(nome)).unwrap().valor;
         assert!((fs("FS tombamento") - 5.333).abs() < 0.01, "{}", fs("FS tombamento"));
         assert!((fs("FS deslizamento") - 1.941).abs() < 0.01, "{}", fs("FS deslizamento"));
+    }
+
+    #[test]
+    fn capacidade_de_carga_com_na() {
+        let fs_cap = |na: Option<f64>| {
+            let mut m = MuroGravidade::default();
+            m.subpressao = false;
+            m.fundacao.na_abaixo_base = na;
+            let r = m.calcular(&Fatores::default());
+            r.verificacoes.iter().find(|v| v.nome.starts_with("FS capacidade de carga — NBR 11682 Tab. 4 / NBR 6122 (estático")).unwrap().valor
+        };
+        let seco = fs_cap(None);
+        let na_base = fs_cap(Some(0.0));
+        let na_fundo = fs_cap(Some(50.0));
+        assert!(na_base < seco, "NA na base deve reduzir o FS: {na_base} x {seco}");
+        assert!((na_fundo - seco).abs() < 1e-9);
+    }
+
+    #[test]
+    fn avisos_sobrecarga_e_coulomb() {
+        let mut m = MuroGravidade::default();
+        m.cargas.q_uniforme = 10.0;
+        let r = m.calcular(&Fatores::default());
+        assert!(r.avisos.iter().any(|a| a.contains("Sobrecarga") && a.contains("NBR 11682")));
+        assert!(!r.avisos.iter().any(|a| a.contains("δ = β")));
+
+        m.empuxo.teoria = Teoria::Coulomb;
+        m.ressalto_tras = 0.4;
+        let r = m.calcular(&Fatores::default());
+        assert!(r.avisos.iter().any(|a| a.contains("δ = β")));
+        m.empuxo.delta = m.empuxo.beta;
+        let r = m.calcular(&Fatores::default());
+        assert!(!r.avisos.iter().any(|a| a.contains("δ = β")));
     }
 
     #[test]

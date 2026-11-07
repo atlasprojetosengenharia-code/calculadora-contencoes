@@ -5,7 +5,7 @@
 use crate::drenagem::Drenagem;
 use crate::empuxo::{rad, ParamEmpuxo};
 use crate::fatores::Fatores;
-use crate::resultado::{fmt, Resultado};
+use crate::resultado::{fmt, Bloco, Formula, Resultado};
 use crate::solo::{Cargas, SoloFundacao};
 use crate::spt::{CondicaoCoesivos, Sondagem};
 use crate::tipos::atirantada::CortinaAtirantada;
@@ -184,9 +184,13 @@ impl Projeto {
         let mut f = base.clone();
         if let Some(c) = self.sondagem.camada_em(z + 0.01) {
             f.gamma = c.gamma;
+            f.gamma_sat = c.gamma_sat;
             f.phi = c.phi;
             f.c = c.c;
         }
+        // NA natural da sondagem sob a fundação: a drenagem do aterro não o
+        // rebaixa. O NA do aterro (condição de drenagem) entra no cálculo do muro.
+        f.na_abaixo_base = self.sondagem.na().map(|n| n - z);
         f
     }
 
@@ -270,35 +274,44 @@ impl Projeto {
         self.drenagem_no_resultado(&mut r);
 
         // Cabeçalho do memorial
+        let t = |x: String| Bloco::Texto(x);
         let mut cab = vec![
-            format!("Projeto: {}", self.nome),
-            format!("Local: {}", if self.local.is_empty() { "—" } else { &self.local }),
-            format!("Responsável técnico: {}", if self.responsavel.is_empty() { "—" } else { &self.responsavel }),
-            format!("Tipo de contenção: {}", self.tipo.nome()),
-            String::new(),
-            format!("== Sondagem {} (SPT) ==", self.sondagem.identificacao),
+            Bloco::Titulo("Identificação".into()),
+            t(format!("Projeto: {}", self.nome)),
+            t(format!("Local: {}", if self.local.is_empty() { "—" } else { &self.local })),
+            t(format!("Responsável técnico: {}", if self.responsavel.is_empty() { "—" } else { &self.responsavel })),
+            t(format!("Tipo de contenção: {}", self.tipo.nome())),
+            Bloco::Titulo(format!("Sondagem {} (SPT)", self.sondagem.identificacao)),
         ];
         let s = &self.sondagem;
-        cab.push(format!(
+        cab.push(t(format!(
             "NA da sondagem: {} ; NA adotado no cálculo: {}",
             s.na().map(|n| format!("{} m", fmt(n))).unwrap_or("não encontrado".into()),
             self.drenagem
                 .na_efetivo(s.na(), self.altura_contida())
                 .map(|n| format!("{} m (condição: {})", fmt(n), self.drenagem.condicao.nome()))
                 .unwrap_or(format!("sem água (condição: {})", self.drenagem.condicao.nome()))
-        ));
-        cab.push(format!(
-            "Correlações: γ — Godoy (1972) ; φ' granulares — {} ; coesivos — {}",
-            s.metodo_phi.nome(),
-            match s.coesivos {
-                CondicaoCoesivos::NaoDrenada => "não drenado, Su = 10·N (Teixeira e Godoy, 1996)".to_string(),
-                CondicaoCoesivos::Drenada => format!("drenado, c' = {} kPa e φ' = {}° (valores adotados)", fmt(s.c_drenado), fmt(s.phi_drenado)),
-            }
-        ));
-        cab.push(format!("{:<13} {:>5}  {:<34} {:>6} {:>6} {:>6} {:>6}  {}", "Prof. (m)", "NSPT", "Descrição", "γ", "γsat", "c'", "φ'", "origem"));
+        )));
+        let (eq_phi, nome_phi) = match s.metodo_phi {
+            crate::spt::MetodoPhi::Teixeira1996 => ("φ' = √(20·N) + 15  (≤ 45°)", "Teixeira (1996)"),
+            crate::spt::MetodoPhi::Godoy1983 => ("φ' = 28 + 0,4·N  (≤ 45°)", "Godoy (1983)"),
+        };
+        cab.push(Bloco::Formula(Formula {
+            titulo: format!("Correlações com o SPT — γ: Godoy (1972) ; φ' granulares: {nome_phi}"),
+            equacao: match s.coesivos {
+                CondicaoCoesivos::NaoDrenada => format!("{eq_phi} ;  coesivos: Su = 10·N (kPa), φ = 0"),
+                CondicaoCoesivos::Drenada => format!("{eq_phi} ;  coesivos: c' e φ' adotados"),
+            },
+            substituicao: match s.coesivos {
+                CondicaoCoesivos::NaoDrenada => "N = NSPT de cada camada (Teixeira e Godoy, 1996)".into(),
+                CondicaoCoesivos::Drenada => format!("N = NSPT de cada camada ;  coesivos: c' = {} kPa, φ' = {}°", fmt(s.c_drenado), fmt(s.phi_drenado)),
+            },
+            resultado: "Parâmetros por camada na tabela abaixo (estimativas a confirmar por ensaios)".into(),
+        }));
+        cab.push(t(format!("{:<13} {:>5}  {:<34} {:>6} {:>6} {:>6} {:>6}  {}", "Prof. (m)", "NSPT", "Descrição", "γ", "γsat", "c'", "φ'", "origem")));
         for (i, c) in s.camadas.iter().enumerate() {
             let desc: String = c.descricao.chars().take(34).collect();
-            cab.push(format!(
+            cab.push(t(format!(
                 "{:<13} {:>5}  {:<34} {:>6} {:>6} {:>6} {:>6}  {}",
                 format!("{}–{}", fmt(s.de(i)), fmt(c.ate)),
                 fmt(c.nspt),
@@ -308,15 +321,25 @@ impl Projeto {
                 fmt(c.c),
                 fmt(c.phi),
                 if c.manual { "manual" } else { "correlação" }
-            ));
+            )));
         }
         if self.tipo == TipoContencao::Grampeado {
             let (g, p, c) = s.medias(self.geometria.h);
-            cab.push(format!(
+            cab.push(t(format!(
                 "Solo grampeado: parâmetros médios até H — γ = {} ; φ' = {}° ; c' = {} kPa",
                 fmt(g), fmt(p), fmt(c)
-            ));
+            )));
         }
+        // Critérios de segurança adotados
+        cab.push(Bloco::Titulo("Critérios de segurança adotados".into()));
+        cab.push(Bloco::Norma(crate::normas::NBR11682_TAB3));
+        cab.push(t(format!(
+            "Níveis de segurança — vidas humanas: {} ; danos materiais e ambientais: {} → FS mínimo de estabilidade = {}{}",
+            f.nivel_vidas.nome(),
+            f.nivel_danos.nome(),
+            fmt(f.fs_global()),
+            if f.majorar_variabilidade { " (majorado 10 % — Nota 1)" } else { "" }
+        )));
         // NBR 11682 7.3.7.3 — monitoramento obrigatório
         if matches!(
             self.tipo,
@@ -331,8 +354,8 @@ impl Projeto {
             r.aviso("Camadas coesivas com c' e φ' padrão (condição drenada) — ajustar com base em ensaios (NBR 11682 Anexo D).");
         }
         r.aviso("Parâmetros obtidos por correlações com o SPT são estimativas; confirmar com ensaios de laboratório/campo.");
-        cab.append(&mut r.memorial);
-        r.memorial = cab;
+        cab.append(&mut r.blocos);
+        r.blocos = cab;
         r
     }
 

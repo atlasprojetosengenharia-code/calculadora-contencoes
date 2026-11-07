@@ -26,6 +26,17 @@ mod fumaca {
             }
             assert!(!r.desenho.poligonos.is_empty());
             assert!(r.verificacoes.iter().all(|v| !v.valor.is_nan()), "{nome}: NaN");
+            // todo memorial tem fórmulas, normas e verificações
+            use crate::resultado::Bloco;
+            let conta = |f: fn(&Bloco) -> bool| r.blocos.iter().filter(|b| f(b)).count();
+            let (nf, nn) = (conta(|b| matches!(b, Bloco::Formula(_))), conta(|b| matches!(b, Bloco::Norma(_))));
+            println!("  blocos: {} fórmulas, {} referências normativas", nf, nn);
+            assert!(nf >= 3 && nn >= 2, "{nome}: memorial sem fórmulas/normas suficientes");
+            // amostras do relatório: MEMORIAL_AMOSTRA=<pasta> cargo test
+            if let Ok(pasta) = std::env::var("MEMORIAL_AMOSTRA") {
+                let html = crate::memorial_html::gerar(&r, nome, "teste");
+                std::fs::write(format!("{pasta}/memorial_{}.html", nome.to_lowercase()), html).unwrap();
+            }
         }
     }
 }

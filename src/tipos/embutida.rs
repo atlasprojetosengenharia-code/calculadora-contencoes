@@ -5,6 +5,7 @@
 use crate::concreto::{as_circular, Concreto};
 use crate::empuxo::{integrar, rad, ParamEmpuxo, Teoria};
 use crate::fatores::Fatores;
+use crate::normas;
 use crate::resultado::{fmt, Desenho, Estilo, Resultado, Verificacao};
 use crate::solo::{Cargas, Perfil, GAMMA_W};
 use serde::{Deserialize, Serialize};
@@ -207,6 +208,7 @@ impl ParedeEmbutida {
     pub fn analisar(&self, r: &mut Resultado, fat: &Fatores) -> Option<Solucao> {
         self.cargas.avisar_minima(r, fat.sobrecarga_minima);
         r.titulo("Dados");
+        r.norma(normas::NBR11682_SOBRECARGA);
         r.linha(format!(
             "Altura escavada H = {} m ; {} ; teoria: {} ; δ ativo = {}° ; δ passivo = {}° ; β = {}°",
             fmt(self.h),
@@ -237,6 +239,24 @@ impl ParedeEmbutida {
             ));
         }
 
+        let c0 = &self.perfil.camadas[0];
+        let (ka0, kp0) = (self.empuxo.coef_ativo(c0.phi, 0.0), self.empuxo.coef_passivo(c0.phi, self.delta_passivo));
+        r.formula(
+            format!("Coeficientes de empuxo — {} (camada 1)", self.empuxo.teoria.nome()),
+            match self.empuxo.teoria {
+                Teoria::Rankine => "Ka = tan²(45° − φ/2) ;  Kp = tan²(45° + φ/2)",
+                Teoria::Coulomb => "Ka, Kp de Coulomb (δ ativo / δ passivo, paramento vertical)",
+            },
+            format!("φ = {}° ;  δa = {}° ;  δp = {}°", fmt(c0.phi), fmt(self.empuxo.delta), fmt(self.delta_passivo)),
+            format!("Ka = {} ;  Kp = {}", fmt(ka0), fmt(kp0)),
+        );
+        r.formula(
+            "Pressão líquida sobre a parede",
+            "p(z) = Ka·(σ'v + q) − 2c'·√Ka + u − [Kp·σ'v,p + 2c'·√Kp] / FS_p − u_p",
+            format!("q = {} kPa ;  FS_p = {}", fmt(self.cargas.q_uniforme), fmt(fat.fs_passivo.max(1.0))),
+            "Diagrama de p(z) desenhado na seção transversal",
+        );
+
         let mut casos = vec![("estático", false)];
         if self.cargas.usar_sismo {
             casos.push(("sísmico", true));
@@ -246,6 +266,30 @@ impl ParedeEmbutida {
             match self.resolver(fat, sis) {
                 Ok(s) => {
                     r.titulo(&format!("Ficha e esforços — caso {nome} (por metro)"));
+                    let (eq, txt) = match self.apoio {
+                        Apoio::Balanco => (
+                            "Blum: Σ M_pé = ∫₀^(H+D0) [pa(z) − pp(z)/FS_p]·(H + D0 − z) dz = 0 ;  D = f·D0",
+                            "momentos em torno do pé da parede",
+                        ),
+                        Apoio::Ancorada => (
+                            "Suporte livre: Σ M_apoio = ∫₀^(H+D0) [pa(z) − pp(z)/FS_p]·(z − z_a) dz = 0 ;  T = ∫ p_líq dz",
+                            "momentos em torno do apoio",
+                        ),
+                    };
+                    r.formula(
+                        format!("Ficha — caso {nome} ({txt})"),
+                        eq,
+                        format!(
+                            "FS_p = {} ;  f = {} ;  D0 = {} m",
+                            fmt(fat.fs_passivo.max(1.0)),
+                            fmt(match self.apoio {
+                                Apoio::Balanco => fat.acrescimo_ficha_balanco,
+                                Apoio::Ancorada => fat.acrescimo_ficha_ancorada,
+                            }),
+                            fmt(s.d0)
+                        ),
+                        format!("D = {} m ;  M_máx = {} kN·m/m ;  V_máx = {} kN/m", fmt(s.d), fmt(s.m_max), fmt(s.v_max)),
+                    );
                     r.linha(format!("Ficha teórica D0 = {} m ; ficha de projeto D = {} m", fmt(s.d0), fmt(s.d)));
                     r.linha(format!("Comprimento total da parede = {} m", fmt(self.h + s.d)));
                     if self.apoio == Apoio::Ancorada {
@@ -382,6 +426,13 @@ impl EstacaPrancha {
                 "Md = γf·M = {} kN·m/m ; fyd = fy/γa1 = {} MPa ; Wnec = Md/fyd = {} cm³/m",
                 fmt(md), fmt(fyd), fmt(w_nec)
             ));
+            r.norma(normas::NBR8800_FLEXAO);
+            r.formula(
+                "Módulo resistente necessário do perfil",
+                "Md = γf·M_máx ;  fyd = fy / γa1 ;  W_nec = Md / fyd",
+                format!("Md = {}·{} ;  fyd = {} / {}", fmt(fat.gamma_f), fmt(s.m_max), fmt(self.fy), fmt(fat.gamma_a1)),
+                format!("W_nec = {} cm³/m ;  W_perfil = {} cm³/m", fmt(w_nec), fmt(self.w_perfil)),
+            );
             r.verif(Verificacao::min(format!("W do perfil ({})", self.nome_perfil), self.w_perfil, w_nec, "cm³/m"));
             r.aviso("Verificar também deslocamentos e a classe da seção (flambagem local) conforme catálogo do fabricante.");
         }
@@ -436,6 +487,17 @@ impl ParedeEstacas {
                         "As calculada = {} cm² ({} barras) ; As mín (0,4% Ac) = {} cm² ; adotar {} cm²",
                         fmt(a), self.n_barras, fmt(as_min), fmt(a.max(as_min))
                     ));
+                    r.norma(normas::NBR6118_FLEXAO);
+                    r.norma(normas::NBR6118_ARM_LONGITUDINAL);
+                    r.formula(
+                        "Armadura longitudinal da estaca (seção circular, flexão simples)",
+                        "M_Rd(As) ≥ Md  (diagrama retangular 0,9·0,85·ηc·fcd ; εcu = 3,5 ‰) ;  0,4 % ≤ As/Ac ≤ 4 %",
+                        format!(
+                            "Md = {}·{} kN·m ;  Ø = {} m ;  {} barras ;  fck = {} MPa",
+                            fmt(fat.gamma_f), fmt(m), fmt(self.diametro), self.n_barras, fmt(c.fck)
+                        ),
+                        format!("As = {} cm² ;  As,mín = {} cm² ;  taxa = {} %", fmt(a), fmt(as_min), fmt(100.0 * a.max(as_min) / ac)),
+                    );
                     r.verif(Verificacao::max("Taxa de armadura longitudinal", 100.0 * a.max(as_min) / ac, 4.0, "%"));
                 }
                 None => {

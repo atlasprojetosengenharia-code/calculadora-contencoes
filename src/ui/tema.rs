@@ -118,8 +118,26 @@ fn fontes(ctx: &egui::Context) {
         f.font_data.insert("segoe_sb".into(), Arc::new(FontData::from_owned(b)));
         forte.insert(0, "segoe_sb".into());
     }
+    // Símbolos matemáticos (≥, √, Σ, ∫ …): Segoe UI Symbol como reserva em todas as famílias.
+    let mut mono = f.families.get(&FontFamily::Monospace).cloned().unwrap_or_default();
+    if let Some(b) = carregar("seguisym.ttf") {
+        f.font_data.insert("simbolos".into(), Arc::new(FontData::from_owned(b)));
+        prop.push("simbolos".into());
+        forte.push("simbolos".into());
+        mono.push("simbolos".into());
+    }
+    // Fórmulas: Cambria Math (face 1 de cambria.ttc), com reserva na família proporcional.
+    let mut mat = prop.clone();
+    if let Some(b) = carregar("cambria.ttc") {
+        let mut d = FontData::from_owned(b);
+        d.index = 1;
+        f.font_data.insert("cambria_math".into(), Arc::new(d));
+        mat.insert(0, "cambria_math".into());
+    }
     f.families.insert(FontFamily::Proportional, prop);
+    f.families.insert(FontFamily::Monospace, mono);
     f.families.insert(FontFamily::Name(FORTE.into()), forte);
+    f.families.insert(FontFamily::Name(super::memorial::FONTE_MATEMATICA.into()), mat);
     ctx.set_fonts(f);
 }
 
