@@ -1,7 +1,7 @@
 //! Tela de abertura: apresentação, versão, autoria e direitos autorais.
 
 use super::tema;
-use super::widgets::{botao_primario, botao_secundario, cartao};
+use super::widgets::{botao_primario, botao_secundario, cartao, pintar_logo};
 use crate::sobre;
 use eframe::egui::{self, RichText, Stroke};
 
@@ -52,11 +52,21 @@ pub fn mostrar(ctx: &egui::Context, sessao_anterior: Option<&str>, atualizacao: 
                 .collect();
             pt.add(egui::Shape::line(pts, Stroke::new(1.5_f32, cor)));
         }
+        // marca d'água: logotipo da Atlas Projetos e Engenharia, bem suave, no fundo
+        let t = crate::marca::textura(ui.ctx(), crate::marca::Peca::Logotipo, ui.visuals().dark_mode);
+        let [tw, th] = t.size();
+        let alt = r.height() * 0.62;
+        let tam = egui::vec2(alt * tw as f32 / th as f32, alt);
+        let ret = egui::Rect::from_center_size(r.center(), tam);
+        let opac = if ui.visuals().dark_mode { 0.045 } else { 0.06 };
+        let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+        pt.image(t.id(), ret, uv, egui::Color32::WHITE.gamma_multiply(opac));
 
         ui.vertical_centered(|ui| {
             ui.add_space((ui.available_height() * 0.10).max(20.0));
-            crate::marca::mostrar(ui, crate::marca::Peca::Logotipo, 150.0);
-            ui.add_space(20.0);
+            let (lr, _) = ui.allocate_exact_size(egui::vec2(116.0, 116.0), egui::Sense::hover());
+            pintar_logo(ui.painter(), lr, &p);
+            ui.add_space(18.0);
             ui.label(RichText::new(sobre::NOME).font(tema::fonte_forte(38.0)).color(p.texto));
             ui.label(RichText::new(sobre::SUBTITULO).size(18.0).color(p.fraco));
             ui.add_space(8.0);
