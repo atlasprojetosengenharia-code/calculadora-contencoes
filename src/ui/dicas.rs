@@ -20,9 +20,12 @@ fn texto(r: &str) -> Option<&'static str> {
         "Sobrecarga na crista q" => "Carga distribuída sobre o terreno contido (tráfego, edificações, estoque). Gera empuxo \
             uniforme Ka·q em toda a altura — em muros baixos costuma ser a maior parcela. A NBR 11682 (7.3.3) exige no mínimo 20 kPa.",
         "Embutimento (solo à frente) Df" => "Profundidade da base abaixo do terreno à frente do muro. Entra na capacidade de carga \
-            (sobrecarga q = γ·Df) e no empuxo passivo, quando considerado. Marchetti recomenda ao menos 30 cm de solo sobre a ponta.",
+            (sobrecarga q = γ·Df) e no empuxo passivo, quando considerado. Pré-dimensionamento: máx(espessura da base + 30 cm \
+            (Marchetti); 0,10·H; 0,40 m) (NBR 16920-1 D.6.1, por analogia; 0,1 a 0,2·H se o terreno à frente for inclinado). \
+            Na divisa com terreno vizinho, a NBR 6122 (7.7.2) exige apoio a pelo menos 1,5 m, salvo em rocha.",
         "Ficha abaixo da escavação" => "Comprimento da cortina abaixo do fundo da escavação. Define o apoio inferior e o \
-            empuxo passivo disponível; ficha curta reduz o FS do pé da cortina.",
+            empuxo passivo disponível; ficha curta reduz o FS do pé da cortina. O pré-dimensionamento adota a menor ficha \
+            que equilibra a reação na base (passivo reduzido − ativo abaixo da escavação).",
         "Profundidade de engastamento" => "Nas contenções embutidas a ficha é calculada pelo programa (equilíbrio de momentos \
             com o passivo reduzido), acrescida do fator de ficha definido em Normas e fatores.",
         "Pré-dimensionar ao alterar H" => "Quando ligado, ao mudar a altura H o programa preenche a geometria pelas proporções \

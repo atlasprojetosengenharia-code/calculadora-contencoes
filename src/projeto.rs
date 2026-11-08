@@ -67,13 +67,16 @@ impl TipoContencao {
     pub fn regra_predim(&self) -> Option<&'static str> {
         match self {
             TipoContencao::Gravidade => Some(
-                "Marchetti (2007), 2.1 — Fig. 38: base de 40 % a 70 % da altura total (a menor que atende), crista máx(30 cm; 10 % H), altura da base 13 % H, paramento 1:12, ressalto frontal 0,5·F, embutimento = base + 30 cm.",
+                "Marchetti (2007), 2.1 — Fig. 38: base de 40 % a 70 % da altura total (a menor que atende), crista máx(30 cm; 10 % H), altura da base 13 % H, paramento 1:12, ressalto frontal 0,5·F. Embutimento Df = máx(base + 30 cm; 0,10·Ht; 0,40 m) — Marchetti ex. 4.1 e NBR 16920-1 D.6.1; na divisa com vizinho, NBR 6122 7.7.2 pede ≥ 1,5 m.",
             ),
             TipoContencao::Flexao => Some(
-                "Marchetti (2007), 2.2 — Fig. 41: base de 40 % a 70 % de H (a menor que atende), parede 20 cm no topo e 9 % H na base, sapata 9 % H, ponta 11 % H, embutimento = sapata + 30 cm.",
+                "Marchetti (2007), 2.2 — Fig. 41: base de 40 % a 70 % de H (a menor que atende), parede 20 cm no topo e 9 % H na base, sapata 9 % H, ponta 11 % H. Embutimento Df = máx(sapata + 30 cm; 0,10·H; 0,40 m) — Marchetti e NBR 16920-1 D.6.1; na divisa com vizinho, NBR 6122 7.7.2 pede ≥ 1,5 m.",
             ),
             TipoContencao::Grampeado => Some(
                 "Prática corrente (não normativa): L de 0,6 a 1,2·H (o menor que atende; mín. 3 m), Sh = Sv = 1,5 m, 1º grampo a 0,75 m.",
+            ),
+            TipoContencao::Atirantada => Some(
+                "Ficha: a menor (passo 0,25 m, mín. 0,50 m) em que o passivo reduzido menos o ativo abaixo da escavação equilibra a reação na base da cortina.",
             ),
             _ => None,
         }
@@ -148,6 +151,13 @@ fn arred(x: f64) -> f64 {
     (x / 0.05 - 1e-9).ceil() * 0.05
 }
 
+/// Embutimento mínimo de muros com fundação direta (m): o maior entre
+/// 30 cm de solo sobre a base (Marchetti, exemplo 4.1), 0,10 da altura
+/// (NBR 16920-1 D.6.1 a, terreno à frente horizontal) e 0,40 m (D.6.1 c).
+fn embutimento_minimo(altura: f64, espessura_base: f64) -> f64 {
+    arred((espessura_base + 0.30).max(0.10 * altura).max(0.40))
+}
+
 impl Default for Projeto {
     fn default() -> Self {
         Self {
@@ -182,7 +192,7 @@ impl Projeto {
                 // Marchetti, Muros de Arrimo, 2.1 (Fig. 38), com Ht = altura total (corpo + base):
                 // base 40–70 % Ht (k) ; topo 30 cm ou 8–15 % Ht → máx(0,30; 10 %) ;
                 // altura da base 12–15 % Ht → 13 % ; paramento frontal 1:10 a 1:15 → 1:12 ;
-                // ponta 0,5d a d → 0,5·F ; embutimento = base + 30 cm (exemplo 4.1)
+                // ponta 0,5d a d → 0,5·F ; embutimento: ver embutimento_minimo
                 let m = &mut self.gravidade;
                 m.f = arred(0.13 * h / 0.87);
                 let ht = h + m.f;
@@ -193,19 +203,19 @@ impl Projeto {
                 m.ressalto_tras = arred((0.02 * ht).max(0.10));
                 let resto = base - m.ressalto_frente - m.proj_frente - m.crista - m.ressalto_tras;
                 m.proj_tardoz = (resto.max(0.0) / 0.05).round() * 0.05;
-                self.geometria.engaste = arred(m.f + 0.30);
+                self.geometria.engaste = embutimento_minimo(ht, m.f);
             }
             TipoContencao::Flexao => {
                 // Marchetti, 2.2 (Fig. 41): topo 20 cm mín. ; parede na base 8–10 % H ;
                 // sapata 8–10 % H ; ponta 10–12 % H ; base 40–70 % H (k) ;
-                // 30 cm mínimos de solo sobre a ponta
+                // 30 cm mínimos de solo sobre a ponta (embutimento_minimo)
                 let m = &mut self.flexao;
                 m.t_topo = 0.20;
                 m.t_base = arred((0.09 * h).max(0.20));
                 m.h_sapata = arred((0.09 * h).max(0.25));
                 m.b_ponta = arred((0.11 * h).max(0.30));
                 m.b_talao = arred((k * h - m.b_ponta - m.t_base).max(0.30));
-                self.geometria.engaste = arred(m.h_sapata + 0.30);
+                self.geometria.engaste = embutimento_minimo(h, m.h_sapata);
             }
             TipoContencao::Grampeado => {
                 // prática corrente (não normativa): L = k·H (mín. 3 m), malha 1,5 × 1,5 m
@@ -225,6 +235,9 @@ impl Projeto {
     /// verificações de estabilidade. Retorna um resumo, ou `None` se o tipo
     /// não tem regra (contenções embutidas: a ficha é calculada).
     pub fn pre_dimensionar(&mut self) -> Option<String> {
+        if self.tipo == TipoContencao::Atirantada {
+            return Some(self.pre_dimensionar_ficha());
+        }
         let (faixa, nome): (&[f64], &str) = match self.tipo {
             TipoContencao::Gravidade | TipoContencao::Flexao => {
                 (&[0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70], "base")
@@ -271,6 +284,28 @@ impl Projeto {
             "Pré-dimensionamento aplicado com {nome} = {} % de H (limite da faixa recomendada). Ainda não atende: {falta} — {dica}.",
             (k * 100.0).round()
         ))
+    }
+
+    /// Cortina atirantada: menor ficha que equilibra a reação na base.
+    fn pre_dimensionar_ficha(&mut self) -> String {
+        const NOME: &str = "Passivo reduzido − ativo na ficha";
+        let atende = |p: &Projeto| p.calcular().verificacoes.iter().find(|v| v.nome.starts_with(NOME)).map(|v| v.ok());
+        let h = self.geometria.h.max(1.0);
+        let max = arred((0.6 * h).max(2.0));
+        let mut d = 0.50;
+        while d <= max + 1e-9 {
+            self.geometria.engaste = d;
+            if atende(self) == Some(true) {
+                return format!("Pré-dimensionamento aplicado: ficha = {} m, a menor que equilibra a reação na base.", crate::resultado::fmt(d));
+            }
+            d += 0.25;
+        }
+        self.geometria.engaste = max;
+        format!(
+            "Pré-dimensionamento aplicado com ficha = {} m (0,6·H). Ainda não atende: equilíbrio da ficha — \
+             apoie a base em rocha, acrescente um nível de tirante mais baixo ou reveja o solo abaixo da escavação.",
+            crate::resultado::fmt(max)
+        )
     }
 
     pub fn salvar(&self, caminho: &std::path::Path) -> Result<(), String> {
@@ -616,6 +651,41 @@ mod testes_predim {
         assert!(m.t_base >= 0.08 * 5.5 && m.t_base <= 0.10 * 5.5 + 0.05);
         assert!(m.b_ponta >= 0.10 * 5.5 && m.b_ponta <= 0.12 * 5.5 + 0.05);
         assert!(b >= 0.40 * 5.5 - 1e-9 && b <= 0.70 * 5.5 + 0.10, "B = {b}");
+    }
+
+    #[test]
+    fn embutimento_minimo_normas() {
+        // muro baixo: governa o mínimo absoluto de 0,40 m (NBR 16920-1 D.6.1 c)
+        assert!((super::embutimento_minimo(1.0, 0.05) - 0.40).abs() < 1e-9);
+        // base fina: 30 cm sobre a base (Marchetti)
+        assert!((super::embutimento_minimo(3.0, 0.25) - 0.55).abs() < 1e-9);
+        // muro alto com base fina: governa 0,10·H
+        assert!((super::embutimento_minimo(9.0, 0.30) - 0.90).abs() < 1e-9);
+        let mut p = Projeto::default();
+        p.tipo = TipoContencao::Flexao;
+        p.geometria.h = 8.0;
+        p.pre_dimensionar();
+        assert!(p.geometria.engaste >= 0.80 - 1e-9 && p.geometria.engaste >= p.flexao.h_sapata + 0.30 - 1e-9);
+    }
+
+    #[test]
+    fn atirantada_ficha_pre_dimensionada() {
+        let mut p = Projeto::default();
+        p.tipo = TipoContencao::Atirantada;
+        p.geometria.h = 6.0;
+        let msg = p.pre_dimensionar().expect("atirantada tem regra de ficha");
+        eprintln!("{msg}");
+        let d = p.geometria.engaste;
+        assert!(d >= 0.50 - 1e-9 && d <= 3.60 + 1e-9, "ficha {d}");
+        if !msg.contains("Ainda não atende") {
+            // a ficha anterior (0,25 m menor) não atendia
+            let ok = |p: &Projeto| p.calcular().verificacoes.iter().find(|v| v.nome.starts_with("Passivo reduzido")).map(|v| v.ok());
+            assert_eq!(ok(&p), Some(true));
+            if d > 0.50 + 1e-9 {
+                p.geometria.engaste = d - 0.25;
+                assert_eq!(ok(&p), Some(false));
+            }
+        }
     }
 
     /// Informativo: as seções pré-dimensionadas atendem às verificações?
