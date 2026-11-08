@@ -24,7 +24,7 @@ pub fn mostrar(ui: &mut egui::Ui, s: &mut Sondagem, h_contencao: f64) -> Option<
     ui.horizontal(|ui| {
         ui.heading("Sondagem SPT");
         ui.add_space(12.0);
-        ui.label("Identificação:");
+        super::widgets::rotulo(ui, "Identificação:");
         ui.add(egui::TextEdit::singleline(&mut s.identificacao).desired_width(110.0));
         if s.modo != ModoSolo::Completo {
             return;
@@ -72,7 +72,8 @@ pub fn mostrar(ui: &mut egui::Ui, s: &mut Sondagem, h_contencao: f64) -> Option<
     });
     ui.add_space(6.0);
     ui.horizontal(|ui| {
-        ui.label(RichText::new("Modo de entrada do solo:").font(tema::fonte_forte(14.0)));
+        let r = ui.label(RichText::new("Modo de entrada do solo:").font(tema::fonte_forte(14.0)));
+        super::widgets::com_dica(r, "Modo de entrada do solo:");
         for m in [ModoSolo::Completo, ModoSolo::Simplificado] {
             mudou |= ui.selectable_value(&mut s.modo, m, format!(" {} ", m.nome())).changed();
         }
@@ -138,13 +139,13 @@ pub fn mostrar(ui: &mut egui::Ui, s: &mut Sondagem, h_contencao: f64) -> Option<
 fn correlacoes(ui: &mut egui::Ui, s: &mut Sondagem) -> bool {
     let mut mudou = false;
     ui.horizontal(|ui| {
-        mudou |= ui.checkbox(&mut s.usar_na, "Nível d'água encontrado a").changed();
+        mudou |= super::widgets::caixa(ui, &mut s.usar_na, "Nível d'água encontrado a").changed();
         mudou |= ui
             .add_enabled(s.usar_na, egui::DragValue::new(&mut s.prof_na).speed(0.05).range(0.0..=100.0).suffix(" m"))
             .changed();
     });
     ui.horizontal(|ui| {
-        ui.label("φ' de solos granulares:");
+        super::widgets::rotulo(ui, "φ' de solos granulares:");
         egui::ComboBox::from_id_salt("metodo_phi").selected_text(s.metodo_phi.nome()).width(260.0).show_ui(ui, |ui| {
             for m in [MetodoPhi::Teixeira1996, MetodoPhi::Godoy1983] {
                 mudou |= ui.selectable_value(&mut s.metodo_phi, m, m.nome()).changed();
@@ -152,7 +153,7 @@ fn correlacoes(ui: &mut egui::Ui, s: &mut Sondagem) -> bool {
         });
     });
     ui.horizontal(|ui| {
-        ui.label("Solos coesivos:");
+        super::widgets::rotulo(ui, "Solos coesivos:");
         mudou |= ui.radio_value(&mut s.coesivos, CondicaoCoesivos::Drenada, "Drenado (longo prazo)").changed();
         mudou |= ui
             .radio_value(&mut s.coesivos, CondicaoCoesivos::NaoDrenada, "Não drenado: Su = 10·N, φ = 0")
@@ -160,9 +161,9 @@ fn correlacoes(ui: &mut egui::Ui, s: &mut Sondagem) -> bool {
     });
     if s.coesivos == CondicaoCoesivos::Drenada {
         ui.horizontal(|ui| {
-            ui.label("   c' adotado");
+            super::widgets::rotulo(ui, "   c' adotado");
             mudou |= ui.add(egui::DragValue::new(&mut s.c_drenado).speed(0.5).range(0.0..=200.0).suffix(" kPa")).changed();
-            ui.label("φ' adotado");
+            super::widgets::rotulo(ui, "φ' adotado");
             mudou |= ui.add(egui::DragValue::new(&mut s.phi_drenado).speed(0.25).range(0.0..=45.0).suffix(" °")).changed();
         });
     }
@@ -178,12 +179,12 @@ fn simplificado(ui: &mut egui::Ui, s: &mut Sondagem) -> bool {
             titulo(ui, "Entrada simplificada na base");
             nota(ui, "Informe o NSPT representativo e o tipo de solo predominante na fundação; γ, φ' e c' são estimados por correlação.");
             egui::Grid::new("spt_simples").num_columns(2).spacing([14.0, 8.0]).show(ui, |ui| {
-                ui.label("NSPT");
+                super::widgets::rotulo(ui, "NSPT");
                 mudou |= ui
                     .add_sized([110.0, 24.0], egui::DragValue::new(&mut s.simples_nspt).speed(0.2).range(0.0..=60.0).max_decimals(0))
                     .changed();
                 ui.end_row();
-                ui.label("Tipo de solo");
+                super::widgets::rotulo(ui, "Tipo de solo");
                 egui::ComboBox::from_id_salt("tipo_simples").selected_text(s.simples_tipo.nome()).width(180.0).show_ui(ui, |ui| {
                     for t in TIPOS {
                         mudou |= ui.selectable_value(&mut s.simples_tipo, t, t.nome()).changed();
@@ -244,7 +245,8 @@ fn tabela(ui: &mut egui::Ui, s: &mut Sondagem) -> bool {
     egui::ScrollArea::horizontal().id_salt("spt_h").show(ui, |ui| {
         egui::Grid::new("tab_spt").num_columns(13).striped(true).spacing([8.0, 5.0]).show(ui, |ui| {
             for t in ["#", "De (m)", "Até (m)", "NSPT", "Descrição", "Tipo", "Estado", "γ", "γsat", "c' (kPa)", "φ' (°)", "", ""] {
-                ui.label(RichText::new(t).font(tema::fonte_forte(13.0)).color(p.fraco));
+                let r = ui.label(RichText::new(t).font(tema::fonte_forte(13.0)).color(p.fraco));
+                super::widgets::com_dica(r, t);
             }
             ui.end_row();
             let n = s.camadas.len();

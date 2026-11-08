@@ -58,7 +58,11 @@ pub fn mostrar(ui: &mut egui::Ui, proj: &mut Projeto, res: &Resultado) -> bool {
     ui.horizontal_top(|ui| {
         ui.allocate_ui_with_layout(egui::vec2(largura_entradas, ui.available_height()), egui::Layout::top_down(egui::Align::Min), |ui| {
             egui::ScrollArea::vertical().id_salt("rol_entradas").show(ui, |ui| {
-                entradas(ui, proj, res);
+                if entradas(ui, proj, res) {
+                    if let Some(m) = proj.pre_dimensionar() {
+                        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(("predim_msg", proj.tipo.arquivo())), m));
+                    }
+                }
             });
         });
         ui.add_space(12.0);
@@ -101,15 +105,20 @@ pub fn lista_verificacoes(ui: &mut egui::Ui, res: &Resultado) {
     });
 }
 
-fn entradas(ui: &mut egui::Ui, proj: &mut Projeto, res: &Resultado) {
+/// Campos de entrada. Retorna `true` se o pré-dimensionamento deve ser aplicado.
+fn entradas(ui: &mut egui::Ui, proj: &mut Projeto, res: &Resultado) -> bool {
     let tipo = proj.tipo;
-    let Projeto { geometria, empuxo, cargas, drenagem, fatores, gravidade, flexao, atirantada, prancha, estacas, grampeado, sondagem, .. } =
-        proj;
+    let mut pre_dim = false;
+    let Projeto {
+        geometria, empuxo, cargas, drenagem, fatores, gravidade, flexao, atirantada, prancha, estacas, grampeado, sondagem, pre_dim_auto, ..
+    } = proj;
 
     cartao(ui, |ui| {
         titulo(ui, "Geometria essencial");
         grade(ui, "geo", |ui| {
-            num(ui, tipo.rotulo_altura(), &mut geometria.h, "m", 0.5..=30.0, 0.05);
+            if num(ui, tipo.rotulo_altura(), &mut geometria.h, "m", 0.5..=30.0, 0.05) && *pre_dim_auto {
+                pre_dim = true;
+            }
             num(ui, "Inclinação do talude de montante β", &mut geometria.beta, "°", 0.0..=45.0, 0.25);
             if geometria.beta > 0.0 {
                 ui.label("");
@@ -122,7 +131,7 @@ fn entradas(ui: &mut egui::Ui, proj: &mut Projeto, res: &Resultado) {
                     num(ui, r, &mut geometria.engaste, "m", 0.0..=15.0, 0.05);
                 }
                 None => {
-                    ui.label("Profundidade de engastamento");
+                    super::widgets::rotulo(ui, "Profundidade de engastamento");
                     let d = res.verificacoes.iter().find(|v| v.nome.starts_with("Ficha de projeto")).map(|v| v.valor);
                     ui.label(RichText::new(match d {
                         Some(d) if tipo != TipoContencao::Grampeado => format!("calculada: {} m", fmt(d)),
@@ -132,6 +141,20 @@ fn entradas(ui: &mut egui::Ui, proj: &mut Projeto, res: &Resultado) {
                 }
             }
         });
+        if let Some(regra) = tipo.regra_predim() {
+            ui.horizontal_wrapped(|ui| {
+                super::widgets::caixa(ui, pre_dim_auto, "Pré-dimensionar ao alterar H");
+                if ui.small_button("↻ Aplicar pré-dimensionamento").on_hover_text(regra).clicked() {
+                    pre_dim = true;
+                }
+            });
+            nota(ui, regra);
+            if let Some(m) = ui.ctx().data(|d| d.get_temp::<String>(egui::Id::new(("predim_msg", tipo.arquivo())))) {
+                let p = tema::de(ui);
+                let cor = if m.contains("Ainda não atende") { p.alerta } else { p.ok };
+                ui.label(RichText::new(m).small().color(cor));
+            }
+        }
         if geometria.q + 1e-9 < fatores.sobrecarga_minima {
             ui.label(RichText::new(format!("⚠ q abaixo do mínimo de {} kPa (NBR 11682 7.3.3)", fmt(fatores.sobrecarga_minima))).small().color(tema::de(ui).alerta));
         }
@@ -179,11 +202,12 @@ fn entradas(ui: &mut egui::Ui, proj: &mut Projeto, res: &Resultado) {
         ui_cargas(ui, cargas);
     });
     ui.add_space(20.0);
+    pre_dim
 }
 
 fn teoria(ui: &mut egui::Ui, e: &mut ParamEmpuxo) {
     ui.horizontal(|ui| {
-        ui.label("Teoria de empuxo:");
+        super::widgets::rotulo(ui, "Teoria de empuxo:");
         ui.selectable_value(&mut e.teoria, Teoria::Rankine, " Rankine ");
         ui.selectable_value(&mut e.teoria, Teoria::Coulomb, " Coulomb ");
     });
@@ -198,7 +222,7 @@ fn fundacao(ui: &mut egui::Ui, f: &mut SoloFundacao, onde: &str) {
     egui::CollapsingHeader::new("Contato base-solo de fundação").id_salt(onde).show(ui, |ui| {
         nota(ui, &format!("γ, φ' e c' da fundação: camada da sondagem {onde}."));
         ui.horizontal(|ui| {
-            ui.label("Atrito na base:");
+            super::widgets::rotulo(ui, "Atrito na base:");
             ui.selectable_value(&mut f.criterio_atrito, CriterioAtrito::AnguloReduzido, " tan(k·φ') ");
             ui.selectable_value(&mut f.criterio_atrito, CriterioAtrito::TangenteReduzida, " k·tg φ' (Marchetti) ");
         });
@@ -208,7 +232,7 @@ fn fundacao(ui: &mut egui::Ui, f: &mut SoloFundacao, onde: &str) {
             num(ui, "Adesão / c'", &mut f.frac_adesao, "", 0.0..=1.0, 0.01);
         });
         ui.horizontal_wrapped(|ui| {
-            ui.label("Predefinições:");
+            super::widgets::rotulo(ui, "Predefinições:");
             if ui.small_button("⅔φ (usual)").clicked() {
                 f.criterio_atrito = CriterioAtrito::AnguloReduzido;
                 f.frac_delta_base = 2.0 / 3.0;
@@ -226,7 +250,7 @@ fn fundacao(ui: &mut egui::Ui, f: &mut SoloFundacao, onde: &str) {
             "Coeficiente de atrito resultante: {}. Marchetti 3.1: f = 0,67·tg φ a tg φ ; c' = 0,5c a 0,67c ; recomenda Ep = 0 (solo à frente pode ser erodido).",
             crate::resultado::fmt(f.coef_atrito())
         ));
-    });
+    }).header_response.on_hover_ui(|ui| { super::widgets::dica_ui(ui, "Contato base-solo de fundação"); });
 }
 
 fn concreto(ui: &mut egui::Ui, id: &str, c: &mut Concreto) {
@@ -237,28 +261,27 @@ fn concreto(ui: &mut egui::Ui, id: &str, c: &mut Concreto) {
             let mut cob = c.cobrimento * 100.0;
             num(ui, "Cobrimento", &mut cob, "cm", 1.0..=10.0, 0.1);
             c.cobrimento = cob / 100.0;
-            ui.label("Peso específico");
+            super::widgets::rotulo(ui, "Peso específico");
             ui.label(RichText::new(format!("{} kN/m³  🔒", fmt(crate::materiais::CONCRETO_ARMADO))).strong());
             ui.end_row();
         });
         nota(ui, "Concreto armado: 25 kN/m³ — NBR 6120:2019, Tab. 1 (valor fixo).");
-    });
+    }).header_response.on_hover_ui(|ui| { super::widgets::dica_ui(ui, "Concreto e aço (NBR 6118:2023)"); });
 }
 
 fn passivo_subpressao(ui: &mut egui::Ui, passivo: &mut bool, frac: &mut f64, sub: &mut bool) {
-    ui.checkbox(passivo, "Considerar empuxo passivo frontal");
+    super::widgets::caixa(ui, passivo, "Considerar empuxo passivo frontal");
     if *passivo {
         grade(ui, "frac_pas", |ui| {
             num(ui, "   Fração mobilizada (≤ 1/redução)", frac, "", 0.0..=1.0, 0.01);
         });
     }
-    ui.checkbox(sub, "Considerar subpressão na base");
+    super::widgets::caixa(ui, sub, "Considerar subpressão na base");
 }
 
 /// Dente de base (chave de cisalhamento).
 fn dente_ui(ui: &mut egui::Ui, dente: &mut bool, h: &mut f64, b: &mut f64) {
-    ui.checkbox(dente, "Dente de base (chave de cisalhamento)")
-        .on_hover_text("Mobiliza o empuxo passivo até a base do dente, reduzido conforme NBR 6122 7.6.3 (solo à frente mantido permanentemente).");
+    super::widgets::caixa(ui, dente, "Dente de base (chave de cisalhamento)");
     if *dente {
         grade(ui, "dente", |ui| {
             num(ui, "   Profundidade do dente", h, "m", 0.10..=2.0, 0.01);
@@ -279,7 +302,7 @@ fn alvenaria_ui(ui: &mut egui::Ui, m: &mut MuroGravidade) {
             }
             Material::PedraArgamassada => {
                 ui.horizontal(|ui| {
-                    ui.label("Argamassa (resist. média):");
+                    super::widgets::rotulo(ui, "Argamassa (resist. média):");
                     egui::ComboBox::from_id_salt("argamassa").selected_text(m.argamassa.nome()).show_ui(ui, |ui| {
                         for a in CLASSES_ARGAMASSA {
                             ui.selectable_value(&mut m.argamassa, a, a.nome());
@@ -289,7 +312,7 @@ fn alvenaria_ui(ui: &mut egui::Ui, m: &mut MuroGravidade) {
             }
             Material::Gabiao | Material::PedraSeca => {}
         }
-        ui.checkbox(&mut m.personalizar_alvenaria, "Informar valores do projetista");
+        super::widgets::caixa(ui, &mut m.personalizar_alvenaria, "Informar valores do projetista");
         if m.personalizar_alvenaria {
             grade(ui, "alv_p", |ui| {
                 num(ui, "σ admissível (compressão)", &mut m.sigma_adm, "MPa", 0.05..=20.0, 0.05);
@@ -318,14 +341,14 @@ fn alvenaria_ui(ui: &mut egui::Ui, m: &mut MuroGravidade) {
             );
         });
         nota(ui, &pr.origem);
-    });
+    }).header_response.on_hover_ui(|ui| { super::widgets::dica_ui(ui, "Alvenaria — tensões admissíveis"); });
 }
 
 fn det_gravidade(ui: &mut egui::Ui, m: &mut MuroGravidade, h: f64) {
     ui.horizontal(|ui| {
         croqui_gravidade(ui);
         ui.vertical(|ui| {
-            ui.label("Material:");
+            super::widgets::rotulo(ui, "Material:");
             egui::ComboBox::from_id_salt("material").selected_text(m.material.nome()).width(170.0).show_ui(ui, |ui| {
                 for mat in MATERIAIS {
                     ui.selectable_value(&mut m.material, mat, format!("{}  —  {} kN/m³", mat.nome(), fmt(mat.peso())));
@@ -355,13 +378,13 @@ fn det_gravidade(ui: &mut egui::Ui, m: &mut MuroGravidade, h: f64) {
         grade(ui, "grav_det_g", |ui| {
             num(ui, "Espaçamento das juntas de dilatação", &mut m.junta_espac, "m", 3.0..=30.0, 0.5);
         });
-        ui.checkbox(&mut m.coroamento, "Viga de coroamento em concreto armado");
+        super::widgets::caixa(ui, &mut m.coroamento, "Viga de coroamento em concreto armado");
         if m.coroamento {
             grade(ui, "grav_det_c", |ui| {
                 num(ui, "Altura da viga de coroamento", &mut m.coroamento_h, "m", 0.10..=0.80, 0.01);
             });
         }
-    });
+    }).header_response.on_hover_ui(|ui| { super::widgets::dica_ui(ui, "Detalhamento construtivo (juntas e coroamento)"); });
     fundacao(ui, &mut m.fundacao, "na cota da base (z = H + F)");
 }
 
@@ -382,12 +405,12 @@ fn det_flexao(ui: &mut egui::Ui, m: &mut MuroFlexao) {
 pub fn tirante_tipo(ui: &mut egui::Ui, f: &mut Fatores) {
     use crate::fatores::Fixacao;
     ui.horizontal(|ui| {
-        ui.label("Tirante:");
+        super::widgets::rotulo(ui, "Tirante:");
         ui.radio_value(&mut f.tirante_permanente, true, "Permanente");
         ui.radio_value(&mut f.tirante_permanente, false, "Provisório (< 2 anos)");
     });
     ui.horizontal(|ui| {
-        ui.label("Fixação da cabeça:");
+        super::widgets::rotulo(ui, "Fixação da cabeça:");
         ui.radio_value(&mut f.tirante_fixacao, Fixacao::Rosca, "Rosca");
         ui.radio_value(&mut f.tirante_fixacao, Fixacao::Clavete, "Clavetes");
     });
@@ -403,7 +426,7 @@ fn det_atirantada(ui: &mut egui::Ui, c: &mut CortinaAtirantada, f: &mut Fatores,
         }
     });
     ui.horizontal(|ui| {
-        ui.label("Diagrama:");
+        super::widgets::rotulo(ui, "Diagrama:");
         ui.radio_value(&mut c.diagrama, Diagrama::Aparente, "Aparente (Terzaghi-Peck)");
         ui.radio_value(&mut c.diagrama, Diagrama::Teorico, "Teórico");
     });
@@ -466,7 +489,7 @@ fn det_parede(ui: &mut egui::Ui, p: &mut ParedeEmbutida, emp: &ParamEmpuxo) {
         }
     });
     ui.horizontal(|ui| {
-        ui.checkbox(&mut p.usar_na_frente, "NA no lado escavado a");
+        super::widgets::caixa(ui, &mut p.usar_na_frente, "NA no lado escavado a");
         ui.add_enabled(p.usar_na_frente, egui::DragValue::new(&mut p.prof_na_frente).speed(0.05).range(0.0..=60.0).suffix(" m"));
     });
 }
@@ -475,7 +498,7 @@ fn det_prancha(ui: &mut egui::Ui, e: &mut EstacaPrancha, emp: &ParamEmpuxo) {
     det_parede(ui, &mut e.parede, emp);
     ui.separator();
     ui.horizontal(|ui| {
-        ui.label("Perfil:");
+        super::widgets::rotulo(ui, "Perfil:");
         ui.add(egui::TextEdit::singleline(&mut e.nome_perfil).desired_width(180.0));
     });
     grade(ui, "pran", |ui| {
@@ -492,7 +515,7 @@ fn det_estacas(ui: &mut egui::Ui, e: &mut ParedeEstacas, emp: &ParamEmpuxo) {
         num(ui, "Diâmetro", &mut e.diametro, "m", 0.2..=2.0, 0.01);
         num(ui, "Espaçamento (eixo a eixo)", &mut e.espacamento, "m", 0.15..=5.0, 0.01);
         num(ui, "Altura da viga de travamento", &mut e.viga_h, "m", 0.3..=1.5, 0.01);
-        ui.label("Nº de barras longitudinais");
+        super::widgets::rotulo(ui, "Nº de barras longitudinais");
         ui.add(egui::DragValue::new(&mut e.n_barras).range(6..=40));
         ui.end_row();
     });
@@ -537,7 +560,7 @@ fn ui_drenagem(ui: &mut egui::Ui, d: &mut Drenagem, tipo: TipoContencao) {
         return;
     }
     ui.separator();
-    ui.checkbox(&mut d.barbacas, "Barbacãs");
+    super::widgets::caixa(ui, &mut d.barbacas, "Barbacãs");
     if d.barbacas {
         grade(ui, "barb", |ui| {
             num(ui, "   Diâmetro (tubo PVC)", &mut d.diam_barbaca_mm, "mm", 32.0..=200.0, 1.0);
@@ -547,10 +570,10 @@ fn ui_drenagem(ui: &mut egui::Ui, d: &mut Drenagem, tipo: TipoContencao) {
             num(ui, "   Declividade para fora", &mut d.declividade, "%", 0.0..=20.0, 0.5);
         });
     }
-    ui.checkbox(&mut d.filtro, "Filtro / camada drenante no tardoz");
+    super::widgets::caixa(ui, &mut d.filtro, "Filtro / camada drenante no tardoz");
     if d.filtro {
         ui.horizontal(|ui| {
-            ui.label("   Material:");
+            super::widgets::rotulo(ui, "   Material:");
             egui::ComboBox::from_id_salt("filtro").selected_text(d.material_filtro.nome()).show_ui(ui, |ui| {
                 for m in [MaterialFiltro::BritaGeotextil, MaterialFiltro::Geocomposto, MaterialFiltro::AreiaGrossa] {
                     ui.selectable_value(&mut d.material_filtro, m, m.nome());
@@ -562,12 +585,12 @@ fn ui_drenagem(ui: &mut egui::Ui, d: &mut Drenagem, tipo: TipoContencao) {
         });
     }
     ui.horizontal(|ui| {
-        ui.checkbox(&mut d.dreno_pe, "Dreno de pé (tubo perfurado) Ø");
+        super::widgets::caixa(ui, &mut d.dreno_pe, "Dreno de pé (tubo perfurado) Ø");
         ui.add_enabled(d.dreno_pe, egui::DragValue::new(&mut d.diam_dreno_pe_mm).speed(1.0).range(50.0..=300.0).suffix(" mm"));
     });
-    ui.checkbox(&mut d.canaleta_crista, "Canaleta de crista");
+    super::widgets::caixa(ui, &mut d.canaleta_crista, "Canaleta de crista");
     if matches!(tipo, TipoContencao::Atirantada | TipoContencao::Grampeado) {
-        ui.checkbox(&mut d.dhp, "Drenos sub-horizontais profundos (DHP)");
+        super::widgets::caixa(ui, &mut d.dhp, "Drenos sub-horizontais profundos (DHP)");
         if d.dhp {
             grade(ui, "dhp", |ui| {
                 num(ui, "   Comprimento", &mut d.dhp_comprimento, "m", 1.0..=40.0, 0.1);
@@ -578,7 +601,7 @@ fn ui_drenagem(ui: &mut egui::Ui, d: &mut Drenagem, tipo: TipoContencao) {
 }
 
 fn ui_cargas(ui: &mut egui::Ui, c: &mut Cargas) {
-    ui.checkbox(&mut c.usar_faixa, "Carga em faixa (Boussinesq)");
+    super::widgets::caixa(ui, &mut c.usar_faixa, "Carga em faixa (Boussinesq)");
     if c.usar_faixa {
         grade(ui, "faixa", |ui| {
             num(ui, "   Intensidade", &mut c.q_faixa, "kPa", 0.0..=1000.0, 0.5);
@@ -586,7 +609,7 @@ fn ui_cargas(ui: &mut egui::Ui, c: &mut Cargas) {
             num(ui, "   Largura da faixa", &mut c.faixa_larg, "m", 0.1..=50.0, 0.05);
         });
     }
-    ui.checkbox(&mut c.usar_sismo, "Ação sísmica (Mononobe-Okabe)");
+    super::widgets::caixa(ui, &mut c.usar_sismo, "Ação sísmica (Mononobe-Okabe)");
     if c.usar_sismo {
         grade(ui, "sismo", |ui| {
             num(ui, "   kh (ah/g)", &mut c.kh, "", 0.0..=0.5, 0.005);

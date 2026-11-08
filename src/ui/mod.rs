@@ -1,4 +1,5 @@
 pub mod contencao;
+pub mod dicas;
 pub mod fatores;
 pub mod inicio;
 pub mod memorial;

@@ -148,6 +148,8 @@ pub fn aplicar(ctx: &egui::Context) {
     ctx.set_visuals_of(egui::Theme::Dark, visuais(true));
     ctx.set_visuals_of(egui::Theme::Light, visuais(false));
     ctx.all_styles_mut(|s| {
+        // observações aparecem após ~1 s com o mouse parado sobre o campo
+        s.interaction.tooltip_delay = 1.0;
         s.spacing.item_spacing = egui::vec2(8.0, 7.0);
         s.spacing.button_padding = egui::vec2(12.0, 5.0);
         s.spacing.interact_size.y = 26.0;

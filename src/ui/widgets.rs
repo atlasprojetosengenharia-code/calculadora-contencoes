@@ -19,12 +19,41 @@ pub fn cartao<R>(ui: &mut egui::Ui, conteudo: impl FnOnce(&mut egui::Ui) -> R) -
 }
 
 /// Título de seção com barra de destaque.
+/// Conteúdo do balão de observações de um rótulo.
+pub fn dica_ui(ui: &mut egui::Ui, rotulo: &str) {
+    if let Some(d) = super::dicas::dica(rotulo) {
+        ui.set_max_width(380.0);
+        let p = tema::de(ui);
+        ui.label(RichText::new("ⓘ Observações").font(tema::fonte_forte(12.5)).color(p.destaque));
+        ui.label(RichText::new(rotulo.trim().trim_end_matches(':')).strong());
+        ui.label(d);
+    }
+}
+
+/// Anexa a observação do rótulo (se houver) ao passar o mouse.
+pub fn com_dica(r: egui::Response, rotulo: &str) -> egui::Response {
+    if super::dicas::dica(rotulo).is_some() { r.on_hover_ui(|ui| dica_ui(ui, rotulo)) } else { r }
+}
+
+/// Rótulo simples com observação ao passar o mouse.
+pub fn rotulo(ui: &mut egui::Ui, texto: &str) -> egui::Response {
+    let r = ui.label(texto);
+    com_dica(r, texto)
+}
+
+/// Caixa de marcar com observação ao passar o mouse.
+pub fn caixa(ui: &mut egui::Ui, v: &mut bool, texto: &str) -> egui::Response {
+    let r = ui.checkbox(v, texto);
+    com_dica(r, texto)
+}
+
 pub fn titulo(ui: &mut egui::Ui, texto: &str) {
     let p = tema::de(ui);
     ui.horizontal(|ui| {
         let (r, _) = ui.allocate_exact_size(egui::vec2(4.0, 18.0), Sense::hover());
         ui.painter().rect_filled(r, 2.0, p.destaque);
-        ui.label(RichText::new(texto).font(tema::fonte_forte(16.0)).color(p.texto));
+        let l = ui.label(RichText::new(texto).font(tema::fonte_forte(16.0)).color(p.texto));
+        com_dica(l, texto);
     });
     ui.add_space(2.0);
 }
@@ -36,12 +65,13 @@ pub fn nota(ui: &mut egui::Ui, texto: &str) {
 
 /// Linha de grade "rótulo | valor com unidade".
 pub fn num(ui: &mut egui::Ui, rotulo: &str, v: &mut f64, unid: &str, faixa: RangeInclusive<f64>, vel: f64) -> bool {
-    ui.label(rotulo);
+    let l = ui.label(rotulo);
+    com_dica(l, rotulo);
     let mut dv = egui::DragValue::new(v).speed(vel).range(faixa).max_decimals(3);
     if !unid.is_empty() {
         dv = dv.suffix(format!(" {unid}"));
     }
-    let r = ui.add_sized([110.0, 24.0], dv);
+    let r = com_dica(ui.add_sized([110.0, 24.0], dv), rotulo);
     ui.end_row();
     r.changed()
 }

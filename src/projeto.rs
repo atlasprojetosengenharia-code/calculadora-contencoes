@@ -63,6 +63,21 @@ impl TipoContencao {
             _ => "Altura escavada H",
         }
     }
+    /// Regra de pré-dimensionamento da geometria a partir de H, se houver.
+    pub fn regra_predim(&self) -> Option<&'static str> {
+        match self {
+            TipoContencao::Gravidade => Some(
+                "Marchetti (2007), 2.1 — Fig. 38: base de 40 % a 70 % da altura total (a menor que atende), crista máx(30 cm; 10 % H), altura da base 13 % H, paramento 1:12, ressalto frontal 0,5·F, embutimento = base + 30 cm.",
+            ),
+            TipoContencao::Flexao => Some(
+                "Marchetti (2007), 2.2 — Fig. 41: base de 40 % a 70 % de H (a menor que atende), parede 20 cm no topo e 9 % H na base, sapata 9 % H, ponta 11 % H, embutimento = sapata + 30 cm.",
+            ),
+            TipoContencao::Grampeado => Some(
+                "Prática corrente (não normativa): L de 0,6 a 1,2·H (o menor que atende; mín. 3 m), Sh = Sv = 1,5 m, 1º grampo a 0,75 m.",
+            ),
+            _ => None,
+        }
+    }
     /// Rótulo do campo de engastamento, ou `None` se calculado pelo programa.
     pub fn rotulo_engaste(&self) -> Option<&'static str> {
         match self {
@@ -119,6 +134,18 @@ pub struct Projeto {
     pub prancha: EstacaPrancha,
     pub estacas: ParedeEstacas,
     pub grampeado: SoloGrampeado,
+    /// Preencher a geometria pelo pré-dimensionamento ao alterar a altura H.
+    #[serde(default = "verdadeiro")]
+    pub pre_dim_auto: bool,
+}
+
+fn verdadeiro() -> bool {
+    true
+}
+
+/// Arredonda para cima em múltiplos de 5 cm.
+fn arred(x: f64) -> f64 {
+    (x / 0.05 - 1e-9).ceil() * 0.05
 }
 
 impl Default for Projeto {
@@ -140,11 +167,112 @@ impl Default for Projeto {
             prancha: EstacaPrancha::default(),
             estacas: ParedeEstacas::default(),
             grampeado: SoloGrampeado::default(),
+            pre_dim_auto: true,
         }
     }
 }
 
 impl Projeto {
+    /// Aplica as proporções do pré-dimensionamento com a fração `k` da faixa
+    /// variável (base dos muros, comprimento dos grampos).
+    fn aplicar_proporcoes(&mut self, k: f64) {
+        let h = self.geometria.h.max(0.5);
+        match self.tipo {
+            TipoContencao::Gravidade => {
+                // Marchetti, Muros de Arrimo, 2.1 (Fig. 38), com Ht = altura total (corpo + base):
+                // base 40–70 % Ht (k) ; topo 30 cm ou 8–15 % Ht → máx(0,30; 10 %) ;
+                // altura da base 12–15 % Ht → 13 % ; paramento frontal 1:10 a 1:15 → 1:12 ;
+                // ponta 0,5d a d → 0,5·F ; embutimento = base + 30 cm (exemplo 4.1)
+                let m = &mut self.gravidade;
+                m.f = arred(0.13 * h / 0.87);
+                let ht = h + m.f;
+                let base = arred(k * ht);
+                m.crista = arred((0.10 * ht).max(0.30));
+                m.proj_frente = arred(h / 12.0);
+                m.ressalto_frente = arred(0.5 * m.f);
+                m.ressalto_tras = arred((0.02 * ht).max(0.10));
+                let resto = base - m.ressalto_frente - m.proj_frente - m.crista - m.ressalto_tras;
+                m.proj_tardoz = (resto.max(0.0) / 0.05).round() * 0.05;
+                self.geometria.engaste = arred(m.f + 0.30);
+            }
+            TipoContencao::Flexao => {
+                // Marchetti, 2.2 (Fig. 41): topo 20 cm mín. ; parede na base 8–10 % H ;
+                // sapata 8–10 % H ; ponta 10–12 % H ; base 40–70 % H (k) ;
+                // 30 cm mínimos de solo sobre a ponta
+                let m = &mut self.flexao;
+                m.t_topo = 0.20;
+                m.t_base = arred((0.09 * h).max(0.20));
+                m.h_sapata = arred((0.09 * h).max(0.25));
+                m.b_ponta = arred((0.11 * h).max(0.30));
+                m.b_talao = arred((k * h - m.b_ponta - m.t_base).max(0.30));
+                self.geometria.engaste = arred(m.h_sapata + 0.30);
+            }
+            TipoContencao::Grampeado => {
+                // prática corrente (não normativa): L = k·H (mín. 3 m), malha 1,5 × 1,5 m
+                let g = &mut self.grampeado;
+                g.comprimento = arred((k * h).max(3.0));
+                g.sh = 1.5;
+                g.sv = 1.5;
+                g.z1 = 0.75;
+            }
+            _ => {}
+        }
+    }
+
+    /// Pré-dimensionamento da geometria a partir da altura H: aplica as
+    /// proporções de referência e escolhe, dentro da faixa recomendada, a
+    /// menor base (ou o menor comprimento de grampo) que atende às
+    /// verificações de estabilidade. Retorna um resumo, ou `None` se o tipo
+    /// não tem regra (contenções embutidas: a ficha é calculada).
+    pub fn pre_dimensionar(&mut self) -> Option<String> {
+        let (faixa, nome): (&[f64], &str) = match self.tipo {
+            TipoContencao::Gravidade | TipoContencao::Flexao => {
+                (&[0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70], "base")
+            }
+            TipoContencao::Grampeado => (&[0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2], "comprimento dos grampos L"),
+            _ => return None,
+        };
+        // verificações que a variação da faixa pode resolver (estabilidade)
+        let pendentes = |p: &Projeto| -> Option<Vec<String>> {
+            let r = p.calcular();
+            let estab: Vec<_> = r
+                .verificacoes
+                .iter()
+                .filter(|v| match p.tipo {
+                    TipoContencao::Grampeado => !v.nome.starts_with("Face"),
+                    _ => v.nome.contains("(estático)"),
+                })
+                .collect();
+            if estab.is_empty() {
+                return None;
+            }
+            Some(estab.iter().filter(|v| !v.ok()).map(|v| v.nome.split(" — ").next().unwrap_or(&v.nome).to_string()).collect())
+        };
+        for &k in faixa {
+            self.aplicar_proporcoes(k);
+            if pendentes(self).is_some_and(|f| f.is_empty()) {
+                return Some(format!(
+                    "Pré-dimensionamento aplicado: {nome} = {} % de H, a menor da faixa recomendada que atende à estabilidade.",
+                    (k * 100.0).round()
+                ));
+            }
+        }
+        let k = *faixa.last().unwrap();
+        self.aplicar_proporcoes(k);
+        let falta = pendentes(self).unwrap_or_default().join(", ");
+        let dica = match self.tipo {
+            TipoContencao::Grampeado => "aumente o qs, o diâmetro do furo ou reduza o espaçamento",
+            _ if falta.contains("deslizamento") => {
+                "para o deslizamento, considere dente de base, atrito k·tg φ (Marchetti) ou reveja a sobrecarga"
+            }
+            _ => "ajuste a geometria manualmente",
+        };
+        Some(format!(
+            "Pré-dimensionamento aplicado com {nome} = {} % de H (limite da faixa recomendada). Ainda não atende: {falta} — {dica}.",
+            (k * 100.0).round()
+        ))
+    }
+
     pub fn salvar(&self, caminho: &std::path::Path) -> Result<(), String> {
         let txt = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
         std::fs::write(caminho, txt).map_err(|e| e.to_string())
@@ -452,5 +580,65 @@ impl Projeto {
             TipoContencao::Prancha | TipoContencao::Estacas => {}
         }
         dr.relatar(r, self.altura_contida(), &larguras, altura_filtro);
+    }
+}
+
+#[cfg(test)]
+mod testes_predim {
+    use super::*;
+
+    #[test]
+    fn gravidade_proporcoes_do_marchetti() {
+        // Exemplo 4.1 do livro: corpo 5,80 m + base 0,90 m (Ht = 6,70 m)
+        let mut p = Projeto::default();
+        p.tipo = TipoContencao::Gravidade;
+        p.geometria.h = 5.8;
+        assert!(p.pre_dimensionar().is_some());
+        let g = &p.gravidade;
+        let ht = p.geometria.h + g.f;
+        assert!((g.f - 0.90).abs() < 1e-9, "F = {}", g.f);
+        assert!((g.proj_frente - 0.50).abs() < 1e-9, "paramento 1:12 ≈ 0,48 → {}", g.proj_frente);
+        assert!((g.ressalto_frente - 0.45).abs() < 1e-9 && (g.ressalto_tras - 0.15).abs() < 1e-9);
+        let base = g.ressalto_frente + g.proj_frente + g.crista + g.proj_tardoz + g.ressalto_tras;
+        assert!(base >= 0.40 * ht - 1e-9 && base <= 0.70 * ht + 0.05, "base {base} fora de 40–70 % de {ht}");
+        assert!((p.geometria.engaste - 1.20).abs() < 1e-9, "embutimento = base + 30 cm");
+    }
+
+    #[test]
+    fn flexao_proporcoes_do_marchetti() {
+        let mut p = Projeto::default();
+        p.tipo = TipoContencao::Flexao;
+        p.geometria.h = 5.5;
+        p.pre_dimensionar();
+        let m = &p.flexao;
+        let b = m.b_ponta + m.t_base + m.b_talao;
+        assert!((m.t_topo - 0.20).abs() < 1e-9);
+        assert!(m.t_base >= 0.08 * 5.5 && m.t_base <= 0.10 * 5.5 + 0.05);
+        assert!(m.b_ponta >= 0.10 * 5.5 && m.b_ponta <= 0.12 * 5.5 + 0.05);
+        assert!(b >= 0.40 * 5.5 - 1e-9 && b <= 0.70 * 5.5 + 0.10, "B = {b}");
+    }
+
+    /// Informativo: as seções pré-dimensionadas atendem às verificações?
+    #[test]
+    fn predim_atende_estabilidade() {
+        for tipo in [TipoContencao::Gravidade, TipoContencao::Flexao, TipoContencao::Grampeado] {
+            for h in [1.0, 2.0, 3.0, 4.0, 6.0] {
+                let mut p = Projeto::default();
+                p.tipo = tipo;
+                p.geometria.h = h;
+                if std::env::var("PREDIM_AREIA").is_ok() {
+                    p.sondagem.modo = crate::spt::ModoSolo::Simplificado;
+                    p.sondagem.simples_tipo = crate::spt::TipoSolo::AreiaArgilosa;
+                    p.sondagem.simples_nspt = 15.0;
+                    p.sondagem.usar_na = false;
+                    p.sondagem.recalcular();
+                }
+                let msg = p.pre_dimensionar().unwrap_or_default();
+                eprintln!("  {msg}");
+                let r = p.calcular();
+                let falhas: Vec<String> = r.verificacoes.iter().filter(|v| !v.ok()).map(|v| format!("{} {}", v.nome.split(" — ").next().unwrap_or(""), v.expressao())).collect();
+                eprintln!("{} H = {h} m: {}", tipo.nome(), if falhas.is_empty() { "ATENDE".into() } else { falhas.join(" | ") });
+            }
+        }
     }
 }

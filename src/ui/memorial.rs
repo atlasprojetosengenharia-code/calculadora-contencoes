@@ -149,8 +149,8 @@ pub fn mostrar(ui: &mut egui::Ui, res: &Resultado) {
     let id = ui.make_persistent_id("memorial_filtros");
     let (mut ver_formulas, mut ver_normas) = ui.data_mut(|d| *d.get_persisted_mut_or(id, (true, true)));
     ui.horizontal(|ui| {
-        ui.checkbox(&mut ver_formulas, "Fórmulas passo a passo");
-        ui.checkbox(&mut ver_normas, "Referências normativas");
+        super::widgets::caixa(ui, &mut ver_formulas, "Fórmulas passo a passo");
+        super::widgets::caixa(ui, &mut ver_normas, "Referências normativas");
         ui.label(RichText::new("Normas: sínteses dos requisitos — consulte o texto integral da ABNT.").small().color(p.fraco));
     });
     ui.data_mut(|d| d.insert_persisted(id, (ver_formulas, ver_normas)));

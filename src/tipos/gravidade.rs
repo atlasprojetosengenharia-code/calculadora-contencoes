@@ -624,8 +624,19 @@ impl MuroGravidade {
             let pv = integrar(|z| self.empuxo.pressao_ativa(&self.aterro, &self.cargas, theta, z), z0, z1, 200).0
                 * incl.sin();
             let braco = (hv - zc) - ys;
-            let n = wgt + pv;
-            let m_ponta = wgt * (cx - xl) + pv * w - ph * braco;
+            // solo apoiado sobre o tardoz inclinado acima da seção: o empuxo atua no
+            // plano vertical que passa pela face interna da seção, logo a cunha entre
+            // esse plano e o tardoz pesa sobre o corpo (Marchetti 4.1, parte 4)
+            let (w_solo, m_solo) = if xr > g.x_cr + 1e-6 {
+                let cunha = [[g.x_cr, ht], [xr, ys], [xr, ht]];
+                let (a_s, sx, _) = centroide(&cunha);
+                let ws = a_s * self.aterro.gamma_medio(ht);
+                (ws, ws * (sx - xl))
+            } else {
+                (0.0, 0.0)
+            };
+            let n = wgt + pv + w_solo;
+            let m_ponta = wgt * (cx - xl) + pv * w + m_solo - ph * braco;
             let x_r = m_ponta / n;
             let e = w / 2.0 - x_r;
             let (smax, smin) = if e.abs() <= w / 6.0 {
@@ -652,7 +663,7 @@ impl MuroGravidade {
         r.formula(
             "Tensões nas seções horizontais do corpo",
             "σ = (N/b)·(1 ± 6e/b)  (|e| ≤ b/6) ;  σmáx = 2N / (3·x_R)  (|e| > b/6)",
-            "N = peso do corpo acima da seção + Pv ;  e = b/2 − ΣM/N",
+            "N = peso do corpo acima da seção + solo sobre o tardoz + Pv ;  e = b/2 − ΣM/N",
             format!("σmáx = {} MPa ;  σmín = {} MPa", fmt(pior_comp / 1000.0), fmt(pior_tracao / 1000.0)),
         );
         r.verif(Verificacao::max("Compressão máx. no corpo", pior_comp / 1000.0, prop.sigma_adm, "MPa"));
