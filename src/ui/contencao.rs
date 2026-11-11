@@ -11,7 +11,7 @@ use crate::fatores::Fatores;
 use crate::projeto::{Projeto, TipoContencao, TIPOS_CONTENCAO};
 use crate::resultado::{fmt, Resultado};
 use crate::solo::{Cargas, CriterioAtrito, SoloFundacao};
-use crate::tipos::atirantada::{CortinaAtirantada, Diagrama};
+use crate::tipos::atirantada::{AcoTirante, CortinaAtirantada, Diagrama};
 use crate::tipos::embutida::{Apoio, EstacaPrancha, ParedeEmbutida, ParedeEstacas};
 use crate::tipos::flexao::MuroFlexao;
 use crate::tipos::grampeado::SoloGrampeado;
@@ -467,9 +467,24 @@ fn det_atirantada(ui: &mut egui::Ui, c: &mut CortinaAtirantada, f: &mut Fatores,
         num(ui, "Diâmetro do furo", &mut d, "cm", 5.0..=40.0, 0.5);
         c.diam_furo = d / 100.0;
         num(ui, "qs (atrito lateral do bulbo)", &mut c.qs, "kPa", 10.0..=1000.0, 1.0);
-        num(ui, "fyk do aço do tirante", &mut c.fyk_tirante, "MPa", 250.0..=1900.0, 5.0);
-        num(ui, "Área de aço do tirante", &mut c.area_aco, "cm²", 0.5..=50.0, 0.05);
     });
+    super::widgets::caixa(ui, &mut c.auto_dim, "Dimensionar o aço de cada tirante pela tração (NBR 5629)");
+    if c.auto_dim {
+        ui.horizontal(|ui| {
+            super::widgets::rotulo(ui, "   Tipo de aço:");
+            egui::ComboBox::from_id_salt("aco_tir").selected_text(c.tipo_aco.nome()).show_ui(ui, |ui| {
+                for t in [AcoTirante::Barra, AcoTirante::Cordoalha] {
+                    ui.selectable_value(&mut c.tipo_aco, t, t.nome());
+                }
+            });
+        });
+        nota(ui, "A menor opção comercial com 0,9·fyk·As/FS ≥ Ft é adotada em cada nível (ver o memorial).");
+    } else {
+        grade(ui, "tir_aco", |ui| {
+            num(ui, "fyk do aço do tirante", &mut c.fyk_tirante, "MPa", 250.0..=1900.0, 5.0);
+            num(ui, "Área de aço do tirante", &mut c.area_aco, "cm²", 0.5..=50.0, 0.05);
+        });
+    }
     concreto(ui, "cort_c", &mut c.concreto);
 }
 
@@ -523,18 +538,34 @@ fn det_estacas(ui: &mut egui::Ui, e: &mut ParedeEstacas, emp: &ParamEmpuxo) {
 }
 
 fn det_grampeado(ui: &mut egui::Ui, g: &mut SoloGrampeado) {
+    super::widgets::caixa(ui, &mut g.auto_dim, "Dimensionar barra e comprimento pela tração (NBR 16920-2)");
+    if g.auto_dim {
+        nota(ui, "L e Ø da barra são calculados (tração por grampo, arrancamento e cunha); os campos abaixo ficam bloqueados.");
+    }
     grade(ui, "gram", |ui| {
         num(ui, "Inclinação da face (c/ vertical)", &mut g.incl_face, "°", 0.0..=45.0, 0.5);
         num(ui, "Espaçamento horizontal Sh", &mut g.sh, "m", 0.5..=3.0, 0.05);
         num(ui, "Espaçamento vertical Sv", &mut g.sv, "m", 0.5..=3.0, 0.05);
         num(ui, "Profundidade do 1º grampo", &mut g.z1, "m", 0.2..=3.0, 0.05);
-        num(ui, "Comprimento L", &mut g.comprimento, "m", 1.0..=30.0, 0.1);
+        if g.auto_dim {
+            super::widgets::rotulo(ui, "Comprimento L");
+            ui.label(RichText::new("calculado pela tração").weak());
+            ui.end_row();
+        } else {
+            num(ui, "Comprimento L", &mut g.comprimento, "m", 1.0..=30.0, 0.1);
+        }
         num(ui, "Inclinação (abaixo da horizontal)", &mut g.incl_grampo, "°", 0.0..=45.0, 0.5);
         let mut d = g.diam_furo * 100.0;
         num(ui, "Diâmetro do furo", &mut d, "cm", 5.0..=30.0, 0.5);
         g.diam_furo = d / 100.0;
         num(ui, "qs (arrancamento)", &mut g.qs, "kPa", 10.0..=500.0, 1.0);
-        num(ui, "Diâmetro da barra", &mut g.diam_barra, "mm", 10.0..=50.0, 0.5);
+        if g.auto_dim {
+            super::widgets::rotulo(ui, "Diâmetro da barra");
+            ui.label(RichText::new("calculado pela tração").weak());
+            ui.end_row();
+        } else {
+            num(ui, "Diâmetro da barra", &mut g.diam_barra, "mm", 10.0..=50.0, 0.5);
+        }
         num(ui, "fyk da barra", &mut g.fyk_barra, "MPa", 250.0..=1000.0, 5.0);
         let mut e = g.espessura_face * 100.0;
         num(ui, "Espessura da face", &mut e, "cm", 5.0..=40.0, 0.5);

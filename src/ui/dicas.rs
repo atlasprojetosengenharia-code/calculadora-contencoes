@@ -159,6 +159,8 @@ fn texto(r: &str) -> Option<&'static str> {
         "Placa da cabeça (lado)" => "Lado da placa de apoio da cabeça do grampo; define o perímetro de punção na face.",
 
         // ---------------- Drenagem ----------------
+        "Dimensionar o aço de cada tirante pela tração (NBR 5629)" => "Calcula, para cada nível, a carga de trabalho Ft e adota a menor             barra (ou feixe de cordoalhas) comercial com 0,9·fyk·As/FS ≥ Ft (NBR 5629, 4.5.2.1). O comprimento do bulbo é sempre             calculado por L = FS·Ft/(π·D·qs). Desligado, vale a área de aço informada para todos os níveis.",
+        "Dimensionar barra e comprimento pela tração (NBR 16920-2)" => "Calcula a tração em cada grampo, T = (Ka·σ'v − 2c·√Ka)·Sh·Sv,             adota a menor barra CA-50 com Rtd ≥ FS·T e o comprimento L = distância até o plano de ruptura + FS·T/(π·D·qs), em múltiplos             de 0,5 m, aumentando-o até a cunha atender ao FS mínimo. Desligado, valem o L e o Ø informados.",
         "Lâmina d'água / altura contida" => "Fração da altura contida com água atrás da estrutura. Define o empuxo hidrostático (γw·hw²/2) e reduz o peso do solo             (γ'). Em 'parcial' é a lâmina residual de um sistema que funciona mal; em 'sem drenagem', 1,0 = aterro saturado até a             crista (pior caso). No solo grampeado entra como poropressão no plano de ruptura.",
         "Barbacãs" => "Tubos que atravessam o paramento para escoar a água do tardoz. Reduzem a pressão hidrostática.",
         "Diâmetro (tubo PVC)" => "Diâmetro dos barbacãs (usual 75 a 100 mm).",

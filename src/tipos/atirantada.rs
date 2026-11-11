@@ -19,9 +19,58 @@ pub enum Diagrama {
     Aparente,
 }
 
+/// Aço do tirante, para o dimensionamento pela tração.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub enum AcoTirante {
+    /// Barra roscada de alta resistência ST 85/105 (fyk = 850 MPa).
+    Barra,
+    /// Cordoalhas de 7 fios Ø 12,7 mm CP 190 RB (fpyk = 1710 MPa), em feixe.
+    Cordoalha,
+}
+
+impl AcoTirante {
+    pub fn nome(&self) -> &'static str {
+        match self {
+            AcoTirante::Barra => "Barra roscada ST 85/105",
+            AcoTirante::Cordoalha => "Cordoalhas CP 190 RB Ø 12,7 mm",
+        }
+    }
+
+    /// Menor opção comercial cuja carga admissível 0,9·fyk·As/FS atende `carga` (kN):
+    /// (descrição, As em cm², fyk em MPa, atende?).
+    pub fn escolher(&self, carga: f64, fs: f64) -> (String, f64, f64, bool) {
+        let opcoes: Vec<(String, f64, f64)> = match self {
+            AcoTirante::Barra => vec![
+                ("barra ST 85/105 Ø 26,5 mm".into(), 5.52, 850.0),
+                ("barra ST 85/105 Ø 32 mm".into(), 8.04, 850.0),
+                ("barra ST 85/105 Ø 36 mm".into(), 10.18, 850.0),
+                ("barra ST 85/105 Ø 40 mm".into(), 12.57, 850.0),
+            ],
+            AcoTirante::Cordoalha => (1..=12)
+                .map(|n| (format!("{n} cordoalha(s) CP 190 RB Ø 12,7 mm"), 0.987 * n as f64, 1710.0))
+                .collect(),
+        };
+        for (nome, a, f) in &opcoes {
+            if 0.9 * f * a / 10.0 / fs >= carga {
+                return (nome.clone(), *a, *f, true);
+            }
+        }
+        let (nome, a, f) = opcoes.last().unwrap().clone();
+        (nome, a, f, false)
+    }
+}
+
+fn verdadeiro() -> bool {
+    true
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CortinaAtirantada {
+    /// Dimensionar o aço de cada tirante pela tração (NBR 5629).
+    #[serde(default = "verdadeiro")]
+    pub auto_dim: bool,
+    pub tipo_aco: AcoTirante,
     pub h: f64,
     /// Profundidades dos níveis de tirantes (m).
     pub niveis: Vec<f64>,
@@ -55,6 +104,8 @@ impl Default for CortinaAtirantada {
         let mut perfil = Perfil::simples(19.0, 30.0, 5.0);
         perfil.camadas[0].espessura = 30.0;
         Self {
+            auto_dim: true,
+            tipo_aco: AcoTirante::Barra,
             h: 8.0,
             niveis: vec![1.2, 2.8],
             espac_h: 2.5,
@@ -83,6 +134,11 @@ struct Tirante {
     carga: f64,
     l_livre: f64,
     l_bulbo: f64,
+    /// Aço adotado (descrição, As em cm², fyk em MPa) e carga admissível do aço (kN).
+    nome_aco: String,
+    area: f64,
+    fyk: f64,
+    t_adm: f64,
 }
 
 impl CortinaAtirantada {
@@ -233,25 +289,38 @@ impl CortinaAtirantada {
         let fs_aco = fat.fs_tirante_aco();
         let t_adm = 0.9 * rt / fs_aco;
         r.linha(format!(
-            "Tirante {} ; fixação por {} ; fyk·As = {} kN ; carga admissível do aço 0,9·fyk·As/{} = {} kN (4.5.2.1)",
+            "Tirante {} ; fixação por {} ; {}",
             if perm { "permanente" } else { "provisório" },
             match fat.tirante_fixacao {
                 crate::fatores::Fixacao::Rosca => "rosca",
                 crate::fatores::Fixacao::Clavete => "clavetes",
             },
-            fmt(rt), fmt(fs_aco), fmt(t_adm)
+            if self.auto_dim {
+                format!(
+                    "aço dimensionado pela tração de cada tirante ({}): 0,9·fyk·As/{} ≥ Ft (4.5.2.1)",
+                    self.tipo_aco.nome(),
+                    fmt(fs_aco)
+                )
+            } else {
+                format!(
+                    "aço informado: fyk·As = {} kN ; carga admissível 0,9·fyk·As/{} = {} kN (4.5.2.1)",
+                    fmt(rt), fmt(fs_aco), fmt(t_adm)
+                )
+            }
         ));
         r.linha(format!(
             "Bulbo: L = {} · Ft / (π · D · qs) (B.2.4.1) ; trecho livre ≥ {} m (B.2.7)",
             fmt(fat.fs_tirante_bulbo()), fmt(fat.tirante_livre_min())
         ));
         r.norma(normas::NBR5629_ACO);
-        r.formula(
-            "Carga admissível do aço do tirante",
-            "T_adm = 0,9·fyk·As / FS",
-            format!("T_adm = 0,9·{} MPa·{} cm² / {}", fmt(self.fyk_tirante), fmt(self.area_aco), fmt(fs_aco)),
-            format!("fyk·As = {} kN ;  T_adm = {} kN", fmt(rt), fmt(t_adm)),
-        );
+        if !self.auto_dim {
+            r.formula(
+                "Carga admissível do aço do tirante",
+                "T_adm = 0,9·fyk·As / FS",
+                format!("T_adm = 0,9·{} MPa·{} cm² / {}", fmt(self.fyk_tirante), fmt(self.area_aco), fmt(fs_aco)),
+                format!("fyk·As = {} kN ;  T_adm = {} kN", fmt(rt), fmt(t_adm)),
+            );
+        }
         r.norma(normas::NBR5629_BULBO);
         r.norma(normas::NBR5629_TRECHO_LIVRE);
         for (i, &z) in niveis.iter().enumerate() {
@@ -277,8 +346,36 @@ impl CortinaAtirantada {
                     fmt(carga), fmt(l_livre), fmt(l_bulbo), fmt(l_livre + l_bulbo)
                 ),
             );
-            r.verif(Verificacao::max(format!("Tirante {}: Ft ≤ 0,9·fyk·As/{}", i + 1, fmt(fs_aco)), carga, t_adm, "kN"));
-            tirantes.push(Tirante { z, f_m: f_m[i], carga, l_livre, l_bulbo });
+            // aço: dimensionado pela tração (menor opção que atende) ou informado
+            let (nome_aco, as_i, fyk_i, cabe) = if self.auto_dim {
+                self.tipo_aco.escolher(carga, fs_aco)
+            } else {
+                ("aço informado".to_string(), self.area_aco, self.fyk_tirante, true)
+            };
+            let t_adm_i = 0.9 * fyk_i * as_i / 10.0 / fs_aco;
+            if self.auto_dim {
+                r.formula(
+                    format!("Aço do tirante {} — dimensionamento pela tração", i + 1),
+                    "As,nec = Ft·FS / (0,9·fyk) ;  adotar a menor opção comercial com As ≥ As,nec",
+                    format!("As,nec = {}·{} / (0,9·{} MPa)", fmt(carga), fmt(fs_aco), fmt(fyk_i)),
+                    format!(
+                        "As,nec = {} cm² ;  adotado: {} (As = {} cm², T_adm = {} kN)",
+                        fmt(carga * fs_aco / (0.9 * fyk_i) * 10.0), nome_aco, fmt(as_i), fmt(t_adm_i)
+                    ),
+                );
+                if !cabe {
+                    r.aviso(format!("Tirante {}: nenhuma opção de {} resiste à carga; reduza o espaçamento horizontal ou use mais níveis.", i + 1, self.tipo_aco.nome()));
+                }
+            }
+            r.verif(Verificacao::max(format!("Tirante {}: Ft ≤ 0,9·fyk·As/{}", i + 1, fmt(fs_aco)), carga, t_adm_i, "kN"));
+            let f_ens = if perm { 1.75 } else { 1.50 };
+            r.verif(Verificacao::max(
+                format!("Tirante {}: carga de ensaio {}·Ft ≤ 0,9·fyk·As (D.3.4)", i + 1, fmt(f_ens)),
+                f_ens * carga,
+                0.9 * fyk_i * as_i / 10.0,
+                "kN",
+            ));
+            tirantes.push(Tirante { z, f_m: f_m[i], carga, l_livre, l_bulbo, nome_aco, area: as_i, fyk: fyk_i, t_adm: t_adm_i });
         }
         let t_max = tirantes.iter().map(|t| t.carga).fold(0.0, f64::max);
         r.verif(Verificacao::info("Carga de trabalho máxima Ft", t_max, "kN"));
@@ -293,14 +390,12 @@ impl CortinaAtirantada {
             "Carga máxima de ensaio de recebimento",
             "P_ensaio = f·Ft,máx ≤ 0,9·fyk·As",
             format!("P_ensaio = {}·{}", fmt(fa), fmt(t_max)),
-            format!("P_ensaio = {} kN ;  0,9·fyk·As = {} kN", fmt(fa * t_max), fmt(0.9 * rt)),
+            format!(
+                "P_ensaio,máx = {} kN ;  menor 0,9·fyk·As entre os tirantes = {} kN (verificação por tirante acima)",
+                fmt(fa * t_max),
+                fmt(tirantes.iter().map(|t| 0.9 * t.fyk * t.area / 10.0).fold(f64::INFINITY, f64::min))
+            ),
         );
-        r.verif(Verificacao::max(
-            format!("Carga máx. de ensaio ({fa}·Ft) ≤ 0,9·fyk·As (D.3.4)"),
-            fa * t_max,
-            0.9 * rt,
-            "kN",
-        ));
         let v_tir: f64 = tirantes.iter().map(|t| t.f_m * incl.tan()).sum();
         r.linha(format!("Componente vertical dos tirantes transmitida à cortina = {} kN/m", fmt(v_tir)));
 
@@ -411,13 +506,11 @@ impl CortinaAtirantada {
         r.titulo("Detalhamento construtivo — cortina atirantada");
         r.norma(normas::NBR5629_INICIO_BULBO);
         r.linha(format!(
-            "Tirantes: {} linhas ; espaçamento horizontal {} m ; inclinação {}° com a horizontal ; furo Ø {} cm ; aço {} cm² (fyk {} MPa)",
+            "Tirantes: {} linhas ; espaçamento horizontal {} m ; inclinação {}° com a horizontal ; furo Ø {} cm",
             niveis.len(),
             fmt(self.espac_h),
             fmt(self.inclinacao),
-            fmt(self.diam_furo * 100.0),
-            fmt(self.area_aco),
-            fmt(self.fyk_tirante)
+            fmt(self.diam_furo * 100.0)
         ));
         let esp_v: Vec<String> = niveis.windows(2).map(|w| fmt(w[1] - w[0])).collect();
         r.linha(format!(
@@ -427,13 +520,16 @@ impl CortinaAtirantada {
         ));
         for (i, t) in tirantes.iter().enumerate() {
             r.linha(format!(
-                "T{} (z = {} m): trecho livre {} m + trecho ancorado (bulbo) {} m = {} m ; Ft = {} kN",
+                "T{} (z = {} m): trecho livre {} m + trecho ancorado (bulbo) {} m = {} m ; Ft = {} kN ; aço: {} (As = {} cm², T_adm = {} kN)",
                 i + 1,
                 fmt(t.z),
                 fmt(t.l_livre),
                 fmt(t.l_bulbo),
                 fmt(t.l_livre + t.l_bulbo),
-                fmt(t.carga)
+                fmt(t.carga),
+                t.nome_aco,
+                fmt(t.area),
+                fmt(t.t_adm)
             ));
         }
         let l_min = tirantes.iter().map(|t| t.l_livre).fold(f64::INFINITY, f64::min);

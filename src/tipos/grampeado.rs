@@ -11,8 +11,18 @@ use crate::solo::{Cargas, Perfil, GAMMA_W};
 use serde::{Deserialize, Serialize};
 use std::f64::consts::PI;
 
+fn verdadeiro() -> bool {
+    true
+}
+
+/// Bitolas de barra de grampo (CA-50), em mm.
+const BARRAS_GRAMPO: [f64; 4] = [16.0, 20.0, 25.0, 32.0];
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SoloGrampeado {
+    /// Dimensionar a barra e o comprimento dos grampos pela tração (NBR 16920-2).
+    #[serde(default = "verdadeiro")]
+    pub auto_dim: bool,
     pub h: f64,
     /// Inclinação da face com a vertical (graus), positiva para dentro do maciço.
     pub incl_face: f64,
@@ -51,6 +61,7 @@ impl Default for SoloGrampeado {
         c.cobrimento = 0.03;
         c.fyk = 600.0;
         Self {
+            auto_dim: true,
             h: 6.0,
             incl_face: 10.0,
             gamma: 18.0,
@@ -89,6 +100,64 @@ impl SoloGrampeado {
             z += self.sv.max(0.3);
         }
         v
+    }
+
+    /// Tração estimada em cada grampo (kN): (Ka·σ'v − 2c·√Ka)·Sh·Sv, com σ'v incluindo a sobrecarga.
+    fn tracoes(&self, zs: &[f64]) -> Vec<f64> {
+        let perfil = Perfil::simples(self.gamma, self.phi, self.c);
+        let ka = self.empuxo.coef_ativo(self.phi, -rad(self.incl_face));
+        zs.iter()
+            .map(|&z| {
+                let sigma = perfil.sigma_v_ef(z) + self.cargas.q_uniforme;
+                (ka * sigma - 2.0 * self.c * ka.sqrt()).max(0.0) * self.sh * self.sv
+            })
+            .collect()
+    }
+
+    /// Distância ao longo do grampo, a partir da face, até o plano de ruptura `omega` (m).
+    fn dist_ate_plano(&self, z: f64, omega: f64) -> f64 {
+        let (eta, i) = (rad(self.incl_face), rad(self.incl_grampo));
+        let y = self.h - z;
+        let xf = y * eta.tan();
+        ((y - xf * omega.tan()) / (i.sin() + i.cos() * omega.tan())).max(0.0)
+    }
+
+    /// Dimensiona a bitola pela tração máxima (Rtd ≥ FS·T) e o comprimento pelo arrancamento
+    /// (L = distância até o plano crítico + FS·T/(π·D·qs)), em múltiplos de 0,5 m, até que a
+    /// cunha atenda ao FS mínimo.
+    pub fn dimensionar(&mut self, fat: &Fatores) {
+        let zs = self.profundidades();
+        if zs.is_empty() {
+            return;
+        }
+        let trac = self.tracoes(&zs);
+        let t_max = trac.iter().cloned().fold(0.0, f64::max);
+        let (gm, fs) = (fat.gamma_m_grampo, fat.fs_grampo_interna);
+        for &phi in &BARRAS_GRAMPO {
+            self.diam_barra = phi;
+            if self.area_barra_mm2() * self.fyk_barra / 1000.0 / gm >= fs * t_max {
+                break;
+            }
+        }
+        let mut l = 3.0f64;
+        for _ in 0..8 {
+            self.comprimento = l;
+            let crit = self.busca(&zs, false, gm);
+            let mut nec = 3.0f64;
+            for (k, &z) in zs.iter().enumerate() {
+                nec = nec.max(self.dist_ate_plano(z, crit.omega) + fs * trac[k] / (PI * self.diam_furo * self.qs));
+            }
+            let novo = (nec * 2.0).ceil() / 2.0;
+            if (novo - l).abs() < 1e-9 {
+                break;
+            }
+            l = novo;
+        }
+        self.comprimento = l;
+        while l < 1.5 * self.h && self.busca(&zs, false, gm).fs < fat.fs_global() {
+            l += 0.5;
+            self.comprimento = l;
+        }
     }
 
     fn area_barra_mm2(&self) -> f64 {
@@ -212,6 +281,22 @@ impl SoloGrampeado {
         }
         if zs.is_empty() {
             r.aviso("Nenhuma linha de grampos cabe na altura informada.");
+        }
+        if self.auto_dim && !zs.is_empty() {
+            let trac = self.tracoes(&zs);
+            let t_max = trac.iter().cloned().fold(0.0, f64::max);
+            r.formula(
+                "Dimensionamento dos grampos pela tração",
+                "T = (Ka·σ'v − 2c·√Ka)·Sh·Sv ;  Rtd = As·fyk/γm ≥ FS·T,máx ;  L = t_plano + FS·T/(π·D·qs)",
+                format!(
+                    "T,máx = {} kN ;  FS = {} ;  γm = {} ;  D = {} cm ;  qs = {} kPa",
+                    fmt(t_max), fmt(fat.fs_grampo_interna), fmt(gm), fmt(self.diam_furo * 100.0), fmt(self.qs)
+                ),
+                format!(
+                    "barra Ø {} mm (Rtd = {} kN) ;  L = {} m (múltiplo de 0,5 m, mínimo 3 m)",
+                    fmt(self.diam_barra), fmt(rt), fmt(self.comprimento)
+                ),
+            );
         }
 
         let sem = self.busca(&[], false, gm);

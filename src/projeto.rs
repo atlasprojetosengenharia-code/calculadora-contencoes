@@ -73,7 +73,7 @@ impl TipoContencao {
                 "Marchetti (2007), 2.2 — Fig. 41: base de 40 % a 70 % de H (a menor que atende), parede 20 cm no topo e 9 % H na base, sapata 9 % H, ponta 11 % H. Embutimento Df = máx(sapata + 30 cm; 0,10·H; 0,40 m) — Marchetti e NBR 16920-1 D.6.1; na divisa com vizinho, NBR 6122 7.7.2 pede ≥ 1,5 m.",
             ),
             TipoContencao::Grampeado => Some(
-                "Prática corrente (não normativa): L de 0,6 a 1,2·H (o menor que atende; mín. 3 m), Sh = Sv = 1,5 m, 1º grampo a 0,75 m.",
+                "Prática corrente (não normativa): Sh = Sv = 1,5 m e 1º grampo a 0,75 m; barra e comprimento dimensionados pela tração dos grampos (ou L de 0,6 a 1,2·H, o menor que atende, com o dimensionamento automático desligado).",
             ),
             TipoContencao::Atirantada => Some(
                 "Ficha: a menor (passo 0,25 m, mín. 0,50 m) em que o passivo reduzido menos o ativo abaixo da escavação equilibra a reação na base da cortina.",
@@ -237,6 +237,13 @@ impl Projeto {
     pub fn pre_dimensionar(&mut self) -> Option<String> {
         if self.tipo == TipoContencao::Atirantada {
             return Some(self.pre_dimensionar_ficha());
+        }
+        if self.tipo == TipoContencao::Grampeado && self.grampeado.auto_dim {
+            self.aplicar_proporcoes(0.6);
+            return Some(
+                "Pré-dimensionamento aplicado: malha 1,5 × 1,5 m e 1º grampo a 0,75 m; a barra e o comprimento são dimensionados pela tração dos grampos."
+                    .into(),
+            );
         }
         let (faixa, nome): (&[f64], &str) = match self.tipo {
             TipoContencao::Gravidade | TipoContencao::Flexao => {
@@ -427,6 +434,9 @@ impl Projeto {
             .na_efetivo(self.sondagem.na(), g.h, self.tipo)
             .map(|n| (g.h - n).max(0.0))
             .unwrap_or(0.0);
+        if g.auto_dim {
+            g.dimensionar(&self.fatores);
+        }
         g
     }
 
@@ -750,6 +760,9 @@ mod testes_predim {
             let mut p = Projeto::default();
             p.tipo = tipo;
             p.geometria.h = 5.0;
+            // geometria fixa: o dimensionamento automático se adaptaria à água
+            p.grampeado.auto_dim = false;
+            p.atirantada.auto_dim = false;
             p.pre_dimensionar();
             // NA da sondagem abaixo do pé (6 m): antes, 'sem drenagem' = 'drenada'
             let mut m = Vec::new();
@@ -882,6 +895,43 @@ mod testes_predim {
                 assert!(fs(&p, nome) < f0, "{}: água deve reduzir {nome}", tipo.nome());
                 // base mais larga (mesmo H) nunca piora o tombamento
             }
+        }
+    }
+
+    #[test]
+    fn grampos_dimensionados_pela_tracao() {
+        for h in [3.0, 5.0, 8.0] {
+            let mut p = Projeto::default();
+            p.tipo = TipoContencao::Grampeado;
+            p.geometria.h = h;
+            let r = p.calcular();
+            let g = p.preparar_grampeado();
+            assert!(((g.comprimento * 2.0).round() / 2.0 - g.comprimento).abs() < 1e-9, "L múltiplo de 0,5 m: {}", g.comprimento);
+            for v in r.verificacoes.iter().filter(|v| v.nome.starts_with("Grampo ") && v.nome.contains("FS")) {
+                assert!(v.ok(), "H={h}: {}", v.texto());
+            }
+        }
+        // bitola cresce com a tração (altura maior)
+        let mut a = Projeto::default();
+        a.tipo = TipoContencao::Grampeado;
+        a.geometria.h = 3.0;
+        let mut b = a.clone();
+        b.geometria.h = 12.0;
+        assert!(b.preparar_grampeado().diam_barra >= a.preparar_grampeado().diam_barra);
+    }
+
+    #[test]
+    fn tirantes_dimensionados_pela_tracao() {
+        use crate::tipos::atirantada::AcoTirante;
+        for tipo_aco in [AcoTirante::Barra, AcoTirante::Cordoalha] {
+            let mut p = Projeto::default();
+            p.tipo = TipoContencao::Atirantada;
+            p.geometria.h = 6.0;
+            p.atirantada.tipo_aco = tipo_aco;
+            let r = p.calcular();
+            let tir: Vec<_> = r.verificacoes.iter().filter(|v| v.nome.starts_with("Tirante ")).collect();
+            assert!(tir.len() >= 4, "uma verificação de aço e uma de ensaio por nível");
+            assert!(tir.iter().all(|v| v.ok()), "{:?}", tir.iter().filter(|v| !v.ok()).map(|v| v.texto()).collect::<Vec<_>>());
         }
     }
 
