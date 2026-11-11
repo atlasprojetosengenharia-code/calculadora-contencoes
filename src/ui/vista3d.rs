@@ -34,6 +34,8 @@ struct TriCena {
     cor: [u8; 3],
     peca: u32,
     classe: Classe,
+    /// Textura (tipo, ladrilho em m, eixo de projeção 0=x 1=y 2=z) e luz × tinta.
+    tex: Option<(super::texturas::Tex, f32, u8, [f32; 3])>,
 }
 
 /// Cena montada uma vez por projeto/opções; a imagem é rasterizada com
@@ -54,6 +56,31 @@ fn cor_de(m: Material, normal: [f64; 3]) -> [f32; 3] {
     }
     let ([r, g, b], _) = m.cor();
     [r as f32, g as f32, b as f32]
+}
+
+/// Textura, ladrilho (m) e tinta de cada material; `None` = cor lisa (aço, PVC,
+/// cordoalha e peças metálicas seguem a modelagem sem textura).
+fn textura_de(m: Material, normal: [f64; 3]) -> Option<(super::texturas::Tex, f64, [f32; 3])> {
+    use super::texturas::Tex;
+    let branco = [1.0, 1.0, 1.0];
+    Some(match m {
+        Material::Concreto => (Tex::Concreto, 1.6, branco),
+        Material::Bulbo => (Tex::Concreto, 0.8, [0.95, 0.95, 0.92]),
+        Material::Pedra => (Tex::Pedra, 1.4, branco),
+        Material::Gabiao => (Tex::Gabiao, 1.0, branco),
+        // bolsa de brita envolta em manta: manta por fora, brita nas faces cortadas
+        Material::Brita => {
+            if normal[2].abs() > 0.9 { (Tex::Brita, 0.45, branco) } else { (Tex::Geotextil, 0.6, branco) }
+        }
+        Material::Areia => (Tex::Areia, 0.8, branco),
+        Material::Geocomposto => (Tex::Geotextil, 0.6, [0.25, 0.25, 0.27]),
+        Material::SoloArgila => (Tex::Argila, 2.2, branco),
+        Material::SoloAreia => (Tex::Areia, 1.6, branco),
+        Material::SoloSilte => (Tex::Silte, 2.0, branco),
+        Material::SoloAterro => (Tex::SoloEscuro, 1.6, branco),
+        Material::Reaterro => (Tex::SoloEscuro, 1.6, [1.12, 1.05, 1.0]),
+        _ => return None,
+    })
 }
 
 impl Cena {
@@ -81,7 +108,12 @@ impl Cena {
                 let k = 0.42 + 0.62 * (n[0] * luz[0] + n[1] * luz[1] + n[2] * luz[2]).abs() as f32;
                 let c = cor_de(pc.material, n);
                 let q = |x: f32| (x * k * 255.0).clamp(0.0, 255.0) as u8;
-                tris.push(TriCena { v: t, cor: [q(c[0]), q(c[1]), q(c[2])], peca: ip as u32 + 1, classe: pc.classe });
+                let tex = textura_de(pc.material, n).map(|(tx, esc, tinta)| {
+                    let (ax, ay, az) = (n[0].abs(), n[1].abs(), n[2].abs());
+                    let eixo = if ax >= ay && ax >= az { 0 } else if ay >= az { 1 } else { 2 };
+                    (tx, esc as f32, eixo, [tinta[0] * k, tinta[1] * k, tinta[2] * k])
+                });
+                tris.push(TriCena { v: t, cor: [q(c[0]), q(c[1]), q(c[2])], peca: ip as u32 + 1, classe: pc.classe, tex });
             }
         }
         Cena { chave, tris, centro, raio: raio as f32, modelo }
@@ -96,10 +128,13 @@ impl Cena {
         let foco = 0.5 * (w.min(h) as f32) * 3.4 * cam.zoom;
         let (cx, cy) = (w as f32 / 2.0, h as f32 / 2.0);
         let c0 = self.centro;
-        let mut cor = vec![fundo; w * h];
+        // passagem adiada: guarda o triângulo e as coordenadas baricêntricas (corrigidas
+        // pela perspectiva) e só depois colore cada pixel visível uma vez
+        let mut tri_px = vec![u32::MAX; w * h];
+        let mut bar = vec![[0.0f32; 2]; w * h];
         let mut prof = vec![0.0f32; w * h]; // 1/d (maior = mais perto)
         let mut id = vec![0u32; w * h];
-        for t in &self.tris {
+        for (it, t) in self.tris.iter().enumerate() {
             if (t.classe == Classe::Terreno && !cam.terreno)
                 || (matches!(t.classe, Classe::Tirante | Classe::Grampo | Classe::Placa | Classe::Cabeca) && !cam.reforcos)
                 || (matches!(t.classe, Classe::Tubo | Classe::Filtro | Classe::Canaleta) && !cam.drenagem)
@@ -138,7 +173,6 @@ impl Cena {
             if x1 < 0 || y1 < 0 {
                 continue;
             }
-            let c = Color32::from_rgb(t.cor[0], t.cor[1], t.cor[2]);
             let inv = 1.0 / area;
             for yy in y0..=y1 as usize {
                 let py = yy as f32 + 0.5;
@@ -154,7 +188,8 @@ impl Cena {
                     let i = yy * w + xx;
                     if z > prof[i] {
                         prof[i] = z;
-                        cor[i] = c;
+                        tri_px[i] = it as u32;
+                        bar[i] = [w0 * p[0][2] / z * vies, w1 * p[1][2] / z * vies];
                         id[i] = t.peca;
                     }
                 }
@@ -162,6 +197,23 @@ impl Cena {
         }
         // contornos: troca de peça ou salto de profundidade entre vizinhos
         let linha = (escala.round() as usize).max(1);
+        let cor: Vec<Color32> = (0..w * h)
+            .map(|i| {
+                let Some(t) = self.tris.get(tri_px[i] as usize) else { return fundo };
+                match t.tex {
+                    None => Color32::from_rgb(t.cor[0], t.cor[1], t.cor[2]),
+                    Some((tx, esc, eixo, tinta)) => {
+                        let [b0, b1] = bar[i];
+                        let b2 = 1.0 - b0 - b1;
+                        let pw = |k: usize| (b0 as f64 * t.v[0][k] + b1 as f64 * t.v[1][k] + b2 as f64 * t.v[2][k]) as f32;
+                        let (s, r) = match eixo { 0 => (pw(2), pw(1)), 1 => (pw(0), pw(2)), _ => (pw(0), pw(1)) };
+                        let c = super::texturas::amostrar(super::texturas::pixels(tx), s / esc, -r / esc);
+                        let q = |x: u8, k: f32| (x as f32 * k).clamp(0.0, 255.0) as u8;
+                        Color32::from_rgb(q(c[0], tinta[0]), q(c[1], tinta[1]), q(c[2], tinta[2]))
+                    }
+                }
+            })
+            .collect();
         let mut saida = cor.clone();
         for yy in 0..h {
             for xx in 0..w {

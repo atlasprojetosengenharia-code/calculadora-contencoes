@@ -533,13 +533,20 @@ impl Modelo3d {
         let (x0, x1) = (xmin - folga, xmax + folga);
         let z_solo = if corte { 0.5 * l } else { l };
         // muros: o terreno à frente fica na cota do embutimento Df até a face (cobre o ressalto da base)
-        let frente = matches!(p.tipo, TipoContencao::Gravidade | TipoContencao::Flexao).then_some(p.geometria.engaste.max(0.0));
+        let frente = match p.tipo {
+            TipoContencao::Gravidade => Some((p.geometria.engaste.max(0.0), p.preparar_gravidade().geo().x_cr)),
+            TipoContencao::Flexao => {
+                let fx = p.preparar_flexao();
+                Some((p.geometria.engaste.max(0.0), fx.b_ponta + fx.t_topo))
+            }
+            _ => None,
+        };
         md.solos(p, &m, x0, x1, z_solo, l, frente);
         md
     }
 
     /// Volumes de solo por fatias verticais da seção, descontadas as peças.
-    fn solos(&mut self, p: &Projeto, m: &crate::global::Modelo, x0: f64, x1: f64, z1: f64, l: f64, frente: Option<f64>) {
+    fn solos(&mut self, p: &Projeto, m: &crate::global::Modelo, x0: f64, x1: f64, z1: f64, l: f64, frente: Option<(f64, f64)>) {
         let y_sup0 = |x: f64| -> f64 {
             for s in m.sup.windows(2) {
                 let (a, b) = (s[0], s[1]);
@@ -549,7 +556,13 @@ impl Modelo3d {
             }
             if x < m.sup.first().map(|q| q[0]).unwrap_or(0.0) { m.sup[0][1] } else { m.sup.last().map(|q| q[1]).unwrap_or(0.0) }
         };
-        let y_sup = |x: f64| -> f64 { y_sup0(x).max(frente.unwrap_or(f64::NEG_INFINITY)) };
+        // muros: à frente da crista o terreno fica na cota Df (o corpo é recortado como obstáculo)
+        let y_sup = |x: f64| -> f64 {
+            match frente {
+                Some((df, x_crista)) if x < x_crista => df,
+                _ => y_sup0(x),
+            }
+        };
         // obstáculos: seções das peças contínuas e retângulos das paredes verticais
         let mut obst: Vec<Vec<[f64; 2]>> = Vec::new();
         for pc in &self.pecas {
