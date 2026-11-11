@@ -281,6 +281,30 @@ fn caixa_orientada(c: [f64; 3], a: [f64; 3], u: [f64; 3], w: [f64; 3], ha: f64, 
     t
 }
 
+/// Envoltória convexa (cadeia monótona), em sentido anti-horário.
+fn envoltoria(p: &[[f64; 2]]) -> Vec<[f64; 2]> {
+    let mut v = p.to_vec();
+    v.sort_by(|a, b| a[0].total_cmp(&b[0]).then(a[1].total_cmp(&b[1])));
+    v.dedup();
+    if v.len() < 3 {
+        return v;
+    }
+    let cruz = |o: [f64; 2], a: [f64; 2], b: [f64; 2]| (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+    let mut h: Vec<[f64; 2]> = Vec::new();
+    for passo in 0..2 {
+        let ini = h.len();
+        let it: Box<dyn Iterator<Item = &[f64; 2]>> = if passo == 0 { Box::new(v.iter()) } else { Box::new(v.iter().rev()) };
+        for &q in it {
+            while h.len() >= ini + 2 && cruz(h[h.len() - 2], h[h.len() - 1], q) <= 0.0 {
+                h.pop();
+            }
+            h.push(q);
+        }
+        h.pop();
+    }
+    h
+}
+
 /// Polígono circular em planta (x, z).
 fn circulo(xc: f64, zc: f64, d: f64, lados: usize) -> Vec<[f64; 2]> {
     (0..lados)
@@ -359,6 +383,16 @@ impl Modelo3d {
                         forma: ext(s),
                     });
                 }
+                if g.dente && g.dente_h > 0.0 {
+                    // dente sob o pé do paramento frontal (mesma posição do cálculo)
+                    let x0 = g.geo().x_pf;
+                    md.pecas.push(Peca {
+                        nome: format!("Dente de base — {}", g.material.nome()),
+                        classe: Classe::Sapata,
+                        material: mat,
+                        forma: ext(&vec![[x0, -g.dente_h], [x0 + g.dente_b, -g.dente_h], [x0 + g.dente_b, 0.0], [x0, 0.0]]),
+                    });
+                }
             }
             TipoContencao::Flexao => {
                 for (i, s) in m.muros.iter().enumerate() {
@@ -368,6 +402,17 @@ impl Modelo3d {
                         classe: if i == 0 { Classe::Sapata } else { Classe::Muro },
                         material: Material::Concreto,
                         forma: ext(s),
+                    });
+                }
+                let fx = p.preparar_flexao();
+                if fx.dente && fx.dente_h > 0.0 {
+                    // dente sob a parede (centro em b_ponta + t_base/2, como no cálculo)
+                    let xc = fx.b_ponta + fx.t_base / 2.0;
+                    md.pecas.push(Peca {
+                        nome: "Dente de base (concreto armado)".into(),
+                        classe: Classe::Sapata,
+                        material: Material::Concreto,
+                        forma: ext(&vec![[xc - fx.dente_b / 2.0, -fx.dente_h], [xc + fx.dente_b / 2.0, -fx.dente_h], [xc + fx.dente_b / 2.0, 0.0], [xc - fx.dente_b / 2.0, 0.0]]),
                     });
                 }
             }
@@ -487,13 +532,15 @@ impl Modelo3d {
         let folga = 0.8 * h.max(2.0);
         let (x0, x1) = (xmin - folga, xmax + folga);
         let z_solo = if corte { 0.5 * l } else { l };
-        md.solos(p, &m, x0, x1, z_solo, l);
+        // muros: o terreno à frente fica na cota do embutimento Df até a face (cobre o ressalto da base)
+        let frente = matches!(p.tipo, TipoContencao::Gravidade | TipoContencao::Flexao).then_some(p.geometria.engaste.max(0.0));
+        md.solos(p, &m, x0, x1, z_solo, l, frente);
         md
     }
 
     /// Volumes de solo por fatias verticais da seção, descontadas as peças.
-    fn solos(&mut self, p: &Projeto, m: &crate::global::Modelo, x0: f64, x1: f64, z1: f64, l: f64) {
-        let y_sup = |x: f64| -> f64 {
+    fn solos(&mut self, p: &Projeto, m: &crate::global::Modelo, x0: f64, x1: f64, z1: f64, l: f64, frente: Option<f64>) {
+        let y_sup0 = |x: f64| -> f64 {
             for s in m.sup.windows(2) {
                 let (a, b) = (s[0], s[1]);
                 if a[0] <= x && x <= b[0] && (b[0] - a[0]).abs() > 1e-12 {
@@ -502,6 +549,7 @@ impl Modelo3d {
             }
             if x < m.sup.first().map(|q| q[0]).unwrap_or(0.0) { m.sup[0][1] } else { m.sup.last().map(|q| q[1]).unwrap_or(0.0) }
         };
+        let y_sup = |x: f64| -> f64 { y_sup0(x).max(frente.unwrap_or(f64::NEG_INFINITY)) };
         // obstáculos: seções das peças contínuas e retângulos das paredes verticais
         let mut obst: Vec<Vec<[f64; 2]>> = Vec::new();
         for pc in &self.pecas {
@@ -514,6 +562,8 @@ impl Modelo3d {
                 _ => {}
             }
         }
+        // recorte pelo contorno convexo: canal da calha (seção em U) e vãos ficam sem solo
+        let obst: Vec<Vec<[f64; 2]>> = obst.iter().map(|o| envoltoria(o)).collect();
         let y_min = obst.iter().flatten().map(|q| q[1]).fold(m.y_fundo, f64::min);
         let y_fundo = y_min - 1.0;
         // intervalo vertical ocupado por um polígono na abscissa x
@@ -544,6 +594,24 @@ impl Modelo3d {
         cortes.push(f64::INFINITY);
         cortes.push(y_fundo);
         cortes.sort_by(|a, b| a.total_cmp(b));
+        // divisas de camada cruzando faces inclinadas (tardoz, talude): novas quebras em x
+        {
+            let mut extra = Vec::new();
+            let arestas = obst.iter().chain(m.reaterro.iter()).flat_map(|o| (0..o.len()).map(move |i| (o[i], o[(i + 1) % o.len()]))).chain(m.sup.windows(2).map(|s| (s[0], s[1])));
+            for (a, b) in arestas {
+                for &yc in &cortes {
+                    if yc.is_finite() && (a[1] - yc) * (b[1] - yc) < 0.0 {
+                        let x = a[0] + (b[0] - a[0]) * (yc - a[1]) / (b[1] - a[1]);
+                        if x > x0 && x < x1 {
+                            extra.push(x);
+                        }
+                    }
+                }
+            }
+            xs.extend(extra);
+            xs.sort_by(|a, b| a.total_cmp(b));
+            xs.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
+        }
         let material_em = |x: f64, y: f64| -> (Material, String) {
             if m.reaterro.iter().any(|r| intervalo(r, x).is_some_and(|(a, b)| y >= a && y <= b)) {
                 return (Material::Reaterro, "Reaterro compactado".into());

@@ -386,3 +386,52 @@ mod amostra {
         }
     }
 }
+
+#[cfg(test)]
+mod amostra_calha {
+    use super::*;
+    #[test]
+    #[ignore]
+    fn calha() {
+        let Ok(pasta) = std::env::var("PASTA_3D") else { return };
+        let mut p = Projeto::default();
+        p.tipo = crate::projeto::TipoContencao::Flexao;
+        p.geometria.h = 4.0;
+        p.pre_dimensionar();
+        let r = p.calcular();
+        let gd = p.geo_drenagem();
+        println!("canaletas {:?}", gd.canaletas);
+        let m = p.secao_global(&r);
+        println!("sup {:?}", m.sup);
+        let cena = Cena::montar(1, Modelo3d::montar(&p, &r, 10.0, false));
+        let img = cena.rasterizar(900, 600, &Camera { azimute: 0.15, elevacao: 0.2, zoom: 1.6, ..Camera::default() }, Color32::from_rgb(236, 240, 245), 1.0);
+        let px: Vec<u8> = img.pixels.iter().flat_map(|c| [c.r(), c.g(), c.b()]).collect();
+        std::fs::write(format!("{pasta}/calha.png"), crate::raster::Imagem { w: 900, h: 600, px }.png()).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod amostra_gravidade {
+    use super::*;
+    use crate::tipos::gravidade::Material as M;
+    #[test]
+    #[ignore]
+    fn gravidade() {
+        let Ok(pasta) = std::env::var("PASTA_3D") else { return };
+        for (nome, mat, dente) in [("pedra", M::PedraArgamassada, false), ("ciclopico_dente", M::ConcretoCiclopico, true), ("gabiao", M::Gabiao, false)] {
+            let mut p = Projeto::default();
+            p.tipo = crate::projeto::TipoContencao::Gravidade;
+            p.geometria.h = 3.0;
+            p.gravidade.material = mat;
+            p.pre_dimensionar();
+            p.gravidade.dente = dente;
+            let r = p.calcular();
+            for (v, az, el, corte) in [("lado", 0.15f32, 0.15f32, true), ("frente", 0.85, 0.35, false), ("secao", 0.0, 0.0, false)] {
+                let cena = Cena::montar(1, Modelo3d::montar(&p, &r, 8.0, corte));
+                let img = cena.rasterizar(900, 600, &Camera { azimute: az, elevacao: el, zoom: 1.3, corte, ..Camera::default() }, Color32::from_rgb(236, 240, 245), 1.0);
+                let px: Vec<u8> = img.pixels.iter().flat_map(|c| [c.r(), c.g(), c.b()]).collect();
+                std::fs::write(format!("{pasta}/grav_{nome}_{v}.png"), crate::raster::Imagem { w: 900, h: 600, px }.png()).unwrap();
+            }
+        }
+    }
+}
