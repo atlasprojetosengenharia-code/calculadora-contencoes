@@ -26,10 +26,11 @@ fn camada(e: Estilo) -> (&'static str, u8) {
         Estilo::Barbaca => ("DRENAGEM", 4),
         Estilo::Armadura | Estilo::ArmaduraSecao => ("ARMADURA", 1),
         Estilo::Hachura => ("HACHURA", 253),
+        Estilo::Reaterro => ("REATERRO", 44),
     }
 }
 
-const CAMADAS: [(&str, u8); 19] = [
+const CAMADAS: [(&str, u8); 20] = [
     ("CONCRETO", 8),
     ("ACO", 5),
     ("SOLO", 42),
@@ -45,6 +46,7 @@ const CAMADAS: [(&str, u8); 19] = [
     ("DRENAGEM", 4),
     ("ARMADURA", 1),
     ("HACHURA", 253),
+    ("REATERRO", 44),
     ("TEXTO", 7),
     ("TABELA", 7),
     ("CARIMBO", 7),

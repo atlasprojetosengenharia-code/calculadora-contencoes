@@ -227,7 +227,7 @@ fn conteudo() -> Vec<B> {
         N(8, "Exporte o DXF para o desenho e o relatório HTML para o memorial; salve o projeto (.ctc)."),
 
         Cap("11. Limitações e boas práticas"),
-        I("Estabilidade global não implementada — verificar à parte."),
+        I("Estabilidade global por Bishop simplificado (circular): casos com estratigrafia complexa, sismo ou carga em faixa pedem conferência com métodos rigorosos."),
         I("Parâmetros por correlação com o SPT são estimativas; prefira ensaios."),
         I("Comprimentos de armadura aproximados — detalhar no projeto executivo."),
         I("Critérios não normativos (ex.: inclinação de grampos de 10° a 15°, espaçamento de barbacãs) aparecem no \

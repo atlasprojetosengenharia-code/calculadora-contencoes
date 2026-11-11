@@ -174,6 +174,7 @@ fn texto(r: &str) -> Option<&'static str> {
             sobrecarregar a estrutura durante a obra. Usual: 1,0 m.",
         "Gramatura do geotêxtil" => "Massa por área do geotêxtil não tecido que envolve a brita ou separa a areia do solo. Quanto maior, maior a resistência \
             ao punçoamento e à colmatação; o mínimo usual é 200 g/m².",
+        "⚙ Otimizar: solução econômica que atende" => "Quando o pré-dimensionamento não aprova, avalia as alternativas usuais do tipo             (largura da base, dente, passivo frontal, número e espaçamento de tirantes, malha e comprimento de grampos, perfil,             diâmetro de estacas, ficha) e aplica a de menor consumo de material que atende a todas as verificações. O memorial registra a escolha.",
         "Lâmina d'água / altura contida" => "Fração da altura contida com água atrás da estrutura. Define o empuxo hidrostático (γw·hw²/2) e reduz o peso do solo             (γ'). Em 'parcial' é a lâmina residual de um sistema que funciona mal; em 'sem drenagem', 1,0 = aterro saturado até a             crista (pior caso). No solo grampeado entra como poropressão no plano de ruptura.",
         "Barbacãs" => "Tubos que atravessam o paramento para escoar a água do tardoz. Reduzem a pressão hidrostática.",
         "Diâmetro (tubo PVC)" => "Diâmetro dos barbacãs (usual 75 a 100 mm).",

@@ -21,6 +21,7 @@ mod marca;
 mod materiais;
 mod memorial_html;
 mod normas;
+mod otimizar;
 mod pdf;
 mod projeto;
 mod raster;

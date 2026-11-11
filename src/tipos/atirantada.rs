@@ -443,11 +443,9 @@ impl CortinaAtirantada {
 
         self.cargas.avisar_minima(&mut r, fat.sobrecarga_minima);
         r.aviso("Comprimentos de bulbo e qs devem ser confirmados por ensaios de tirantes (NBR 5629, Anexo D).");
-        r.aviso(format!(
-            "Estabilidade global ainda não implementada — FS mínimo exigido = {} (NBR 5629 Tab. B.3 / NBR 11682 Tab. 3{}).",
-            fmt(if fat.tirante_permanente { fat.fs_global() } else { 1.2 }),
-            if fat.tirante_permanente { "" } else { "; obra provisória: mínimo 1,2" }
-        ));
+        if !fat.tirante_permanente {
+            r.aviso("Obra provisória: a NBR 5629 (Tab. B.3) admite FS mínimo de 1,2 na estabilidade global; a verificação abaixo usa o FS da NBR 11682 Tab. 3.");
+        }
         r.aviso("Folga do trecho livre além da cunha ativa e bulbo mínimo são critérios de projeto (editáveis em Fatores), não exigências da NBR 5629.");
         r.desenho = self.desenho(&tirantes, rho);
         self.desenhar_armaduras(&mut r.desenho, &r.armaduras);

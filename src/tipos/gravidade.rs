@@ -106,6 +106,9 @@ pub struct MuroGravidade {
     pub considerar_passivo: bool,
     pub frac_passivo: f64,
     pub subpressao: bool,
+    /// Tardoz em reaterro compactado especificado (só para o desenho). Não é salvo.
+    #[serde(skip)]
+    pub reaterro: bool,
     /// Dente de base (chave de cisalhamento) sob o corpo do muro.
     pub dente: bool,
     /// Profundidade do dente abaixo da base (m).
@@ -150,6 +153,7 @@ impl Default for MuroGravidade {
             considerar_passivo: false,
             frac_passivo: 0.5,
             subpressao: true,
+            reaterro: false,
             dente: false,
             dente_h: 0.4,
             dente_b: 0.4,
@@ -560,7 +564,6 @@ impl MuroGravidade {
         if self.material == Material::Gabiao || self.material == Material::PedraSeca {
             r.aviso("Gabião/pedra seca: verificar também o deslizamento entre camadas e a especificação das telas/pedras.");
         }
-        r.aviso("Estabilidade global (NBR 11682) ainda não implementada — verificar em software de equilíbrio limite.");
         r.desenho = self.desenho(&est.diagrama, hv);
         r
     }
@@ -802,8 +805,9 @@ impl MuroGravidade {
             }
         }
         // maciço contido (dois polígonos convexos)
-        d.poli(Estilo::Solo, vec![[b, 0.0], [xe, 0.0], [xe, sup(xe)], [b, sup(b)]]);
-        d.poli(Estilo::Solo, vec![[g.x_pt, f], [b, f], [b, sup(b)], [g.x_cr, ht]]);
+        let tardoz = if self.reaterro { Estilo::Reaterro } else { Estilo::Solo };
+        d.poli(tardoz, vec![[b, 0.0], [xe, 0.0], [xe, sup(xe)], [b, sup(b)]]);
+        d.poli(tardoz, vec![[g.x_pt, f], [b, f], [b, sup(b)], [g.x_cr, ht]]);
         // muro: base + corpo (polígonos convexos)
         d.retangulo(Estilo::Concreto, 0.0, 0.0, b, f);
         if !(self.dente && self.dente_h > 0.0) {

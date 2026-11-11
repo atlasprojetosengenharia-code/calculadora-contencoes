@@ -140,7 +140,18 @@ impl Modelo {
             }
         }
         let (xa, xb) = (xa?, xb?);
-        if xa <= x0 + 1e-9 || xb >= x1 - 1e-9 || xb - xa < 0.5 {
+        // o arco precisa ter desenvolvimento e profundidade compatíveis com uma ruptura real:
+        // superfícies rasas quase paralelas à face (corda curta, fatias finas) são artefatos
+        if xa <= x0 + 1e-9 || xb >= x1 - 1e-9 || xb - xa < 0.5 * self.esc {
+            return None;
+        }
+        let prof_max = (0..=n)
+            .filter_map(|i| {
+                let x = xa + (xb - xa) * i as f64 / n as f64;
+                Some(self.superficie(x)? - ybot(x)?)
+            })
+            .fold(0.0, f64::max);
+        if prof_max < 0.15 * self.esc {
             return None;
         }
         // a superfície não pode cortar os corpos rígidos
@@ -167,7 +178,7 @@ impl Modelo {
             }
             let sen = ((xm - xc) / r).clamp(-1.0, 1.0);
             let cos = (1.0 - sen * sen).sqrt();
-            if cos < 0.25 {
+            if cos < 0.35 {
                 return None;
             }
             let base = self.solo_em(xm, yb + 1e-3);
@@ -276,13 +287,60 @@ impl Modelo {
                 }
             }
         }
+        // famílias clássicas semeadas explicitamente, para serem cobertas sempre (independe da
+        // grade): círculos que entram no pé ou na face e saem no terrapleno atrás da crista
+        let entradas: Vec<[f64; 2]> = {
+            let mut e = vec![[self.x_corte.min(0.0), self.y_fundo]];
+            for fr in [0.25, 0.5, 0.75] {
+                let y = self.y_fundo + fr * (self.y_topo - self.y_fundo);
+                // ponto da superfície (face) nessa cota: varre x até achar a face
+                let mut xf = None;
+                let mut x = self.x_dom.0;
+                while x < self.x_dom.1 {
+                    if let Some(sy) = self.superficie(x) {
+                        if sy >= y {
+                            xf = Some(x);
+                            break;
+                        }
+                    }
+                    x += 0.02 * self.esc;
+                }
+                if let Some(xf) = xf {
+                    e.push([xf, y]);
+                }
+            }
+            e
+        };
+        for ent in &entradas {
+            for k in 1..=8 {
+                let xs = ent[0] + (0.4 + 0.45 * k as f64) * self.esc;
+                let Some(ys) = self.superficie(xs) else { continue };
+                // círculo pelos dois pontos, centro na mediatriz, a várias distâncias
+                let (mx, my) = ((ent[0] + xs) / 2.0, (ent[1] + ys) / 2.0);
+                let (dx, dy) = (xs - ent[0], ys - ent[1]);
+                let meia = 0.5 * (dx * dx + dy * dy).sqrt();
+                let (nx, ny) = (-dy / (2.0 * meia), dx / (2.0 * meia));
+                for t in [0.1, 0.4, 0.8, 1.3, 2.0, 3.0] {
+                    let (xc, yc) = (mx + nx * t * meia, my + ny * t * meia);
+                    let r = (meia * meia + (t * meia).powi(2)).sqrt();
+                    if yc < ent[1] {
+                        continue;
+                    }
+                    if let Some(c) = self.fs(xc, yc, r, !self.reforcos.is_empty()) {
+                        if !(externa && c.interceptados > 0) {
+                            candidatos.push(c);
+                        }
+                    }
+                }
+            }
+        }
         candidatos.sort_by(|a, b| a.fs.partial_cmp(&b.fs).unwrap_or(std::cmp::Ordering::Equal));
         // fase 2: refina os 4 melhores candidatos de regiões distintas (a tração dos reforços
         // torna a superfície de FS irregular e o mínimo da grade pode não ser o global)
         let (dx0, dy0) = ((cx1 - cx0) / (nx - 1) as f64, (yb - ya) / (ny - 1) as f64);
         let mut escolhidos: Vec<Circulo> = Vec::new();
         for c in candidatos {
-            if escolhidos.len() >= 4 {
+            if escolhidos.len() >= 6 {
                 break;
             }
             if escolhidos.iter().all(|e| (e.xc - c.xc).abs() > 1.5 * dx0 || (e.yc - c.yc).abs() > 1.5 * dy0) {
@@ -293,9 +351,9 @@ impl Modelo {
         for inicio in escolhidos {
             let (mut dx, mut dy) = (dx0, dy0);
             let mut atual = inicio;
-            for _ in 0..3 {
-                dx *= 0.5;
-                dy *= 0.5;
+            for _ in 0..5 {
+                dx *= 0.6;
+                dy *= 0.6;
                 let (ymin0, centro) = (atual.yc - atual.r, atual);
                 for i in -2..=2 {
                     for j in -2..=2 {

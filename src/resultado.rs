@@ -32,8 +32,9 @@ impl Verificacao {
     pub fn ok(&self) -> bool {
         match self.criterio {
             // +∞ (sem esforço instabilizante) atende; NaN e −∞ não.
-            Criterio::Minimo => !self.valor.is_nan() && self.valor >= self.limite - 1e-9,
-            Criterio::Maximo => self.valor.is_finite() && self.valor <= self.limite + 1e-9,
+            // tolerância de 0,5 % (o memorial apresenta 2 casas decimais)
+            Criterio::Minimo => !self.valor.is_nan() && self.valor >= self.limite - 0.005 * self.limite.abs() - 1e-9,
+            Criterio::Maximo => self.valor.is_finite() && self.valor <= self.limite + 0.005 * self.limite.abs() + 1e-9,
             Criterio::Info => true,
         }
     }
@@ -134,6 +135,8 @@ pub enum Estilo {
     ArmaduraSecao,
     /// Hachuras e texturas de materiais (solo, pedra, concreto, areia, brita).
     Hachura,
+    /// Reaterro compactado do tardoz (hachura distinta do solo natural).
+    Reaterro,
 }
 
 /// Polígono CONVEXO em coordenadas do mundo (m), x → direita, y ↑.
@@ -400,11 +403,11 @@ impl Desenho {
 
     /// Hachura o solo (45°) e a fundação (135°) de qualquer desenho já montado.
     pub fn hachurar_solos(&mut self) {
-        let solos: Vec<(Vec<[f64; 2]>, bool)> = self
+        let solos: Vec<(Vec<[f64; 2]>, Estilo)> = self
             .poligonos
             .iter()
-            .filter(|p| matches!(p.estilo, Estilo::Solo | Estilo::SoloFundacao))
-            .map(|p| (p.pontos.clone(), p.estilo == Estilo::SoloFundacao))
+            .filter(|p| matches!(p.estilo, Estilo::Solo | Estilo::SoloFundacao | Estilo::Reaterro))
+            .map(|p| (p.pontos.clone(), p.estilo))
             .collect();
         if solos.is_empty() {
             return;
@@ -413,11 +416,15 @@ impl Desenho {
         let (x0, x1, y0, y1) = limites(&todos);
         let diag = ((x1 - x0).powi(2) + (y1 - y0).powi(2)).sqrt();
         let esp = diag / 60.0;
-        for (p, fund) in solos {
-            if fund {
-                self.hachura(&p, 135.0, esp * 1.6);
-            } else {
-                self.hachura(&p, 45.0, esp);
+        for (p, est) in solos {
+            match est {
+                Estilo::SoloFundacao => self.hachura(&p, 135.0, esp * 1.6),
+                // reaterro compactado: hachura cruzada fina (distinta do solo natural)
+                Estilo::Reaterro => {
+                    self.hachura(&p, 45.0, esp * 0.8);
+                    self.hachura(&p, 135.0, esp * 0.8);
+                }
+                _ => self.hachura(&p, 45.0, esp),
             }
         }
     }

@@ -25,6 +25,9 @@ pub struct MuroFlexao {
     pub considerar_passivo: bool,
     pub frac_passivo: f64,
     pub subpressao: bool,
+    /// Tardoz em reaterro compactado especificado (só para o desenho). Não é salvo.
+    #[serde(skip)]
+    pub reaterro: bool,
     /// Dente de base (chave de cisalhamento) sob a parede.
     pub dente: bool,
     pub dente_h: f64,
@@ -59,6 +62,7 @@ impl Default for MuroFlexao {
             considerar_passivo: false,
             frac_passivo: 0.5,
             subpressao: true,
+            reaterro: false,
             dente: false,
             dente_h: 0.4,
             dente_b: 0.4,
@@ -194,7 +198,6 @@ impl MuroFlexao {
         let det = self.detalhamento(&mut r, &fp, &ft, &fpo);
 
         self.cargas.avisar_minima(&mut r, fat.sobrecarga_minima);
-        r.aviso("Estabilidade global (NBR 11682) ainda não implementada — verificar em software de equilíbrio limite.");
         r.desenho = self.desenho(&est.diagrama, hv);
         self.desenhar_armaduras(&mut r.desenho, &det);
         r
@@ -490,8 +493,9 @@ impl MuroFlexao {
                 d.retangulo(Estilo::Solo, 0.0, hs, bp, self.df);
             }
         }
-        d.poli(Estilo::Solo, vec![[bp + tb, hs], [b, hs], [b, hv], [bp + tt, h]]);
-        d.poli(Estilo::Solo, vec![[b, 0.0], [xe, 0.0], [xe, sup(xe)], [b, hv]]);
+        let tardoz = if self.reaterro { Estilo::Reaterro } else { Estilo::Solo };
+        d.poli(tardoz, vec![[bp + tb, hs], [b, hs], [b, hv], [bp + tt, h]]);
+        d.poli(tardoz, vec![[b, 0.0], [xe, 0.0], [xe, sup(xe)], [b, hv]]);
         d.retangulo(Estilo::Concreto, 0.0, 0.0, b, hs);
         if !(self.dente && self.dente_h > 0.0) {
             // lastro de concreto magro (NBR 6122 7.7.3), e = 5 cm

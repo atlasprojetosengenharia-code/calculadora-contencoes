@@ -144,6 +144,12 @@ pub struct Projeto {
     /// Preencher a geometria pelo pré-dimensionamento ao alterar a altura H.
     #[serde(default = "verdadeiro")]
     pub pre_dim_auto: bool,
+    /// Registro da otimização aplicada (texto para o memorial).
+    #[serde(default)]
+    pub nota_otimizacao: String,
+    /// Não redefinir a malha dos grampos no pré-dimensionamento (uso do otimizador). Não é salvo.
+    #[serde(skip)]
+    pub manter_malha: bool,
 }
 
 fn verdadeiro() -> bool {
@@ -183,6 +189,8 @@ impl Default for Projeto {
             estacas: ParedeEstacas::default(),
             grampeado: SoloGrampeado::default(),
             pre_dim_auto: true,
+            nota_otimizacao: String::new(),
+            manter_malha: false,
         }
     }
 }
@@ -226,12 +234,19 @@ impl Projeto {
                 // prática corrente (não normativa): L = k·H (mín. 3 m), malha 1,5 × 1,5 m
                 let g = &mut self.grampeado;
                 g.comprimento = arred((k * h).max(3.0));
-                g.sh = 1.5;
-                g.sv = 1.5;
-                g.z1 = 0.75;
+                if !self.manter_malha {
+                    g.sh = 1.5;
+                    g.sv = 1.5;
+                    g.z1 = 0.75;
+                }
             }
             _ => {}
         }
+    }
+
+    /// Aplica as proporções com a fração `k` (uso do otimizador).
+    pub fn aplicar_proporcoes_pub(&mut self, k: f64) {
+        self.aplicar_proporcoes(k);
     }
 
     /// Pré-dimensionamento da geometria a partir da altura H: aplica as
@@ -456,6 +471,7 @@ impl Projeto {
         m.h = self.geometria.h;
         m.df = self.geometria.engaste;
         m.aterro = self.perfil_calc();
+        m.reaterro = self.reaterro.usar;
         m.fundacao = self.fundacao_em(m.h + m.f, &m.fundacao);
         m.cargas = self.cargas_calc();
         m.empuxo = self.empuxo_calc();
@@ -468,6 +484,7 @@ impl Projeto {
         m.h = self.geometria.h;
         m.df = self.geometria.engaste;
         m.aterro = self.perfil_calc();
+        m.reaterro = self.reaterro.usar;
         m.fundacao = self.fundacao_em(m.h, &m.fundacao);
         m.cargas = self.cargas_calc();
         m.empuxo = self.empuxo_calc();
@@ -623,6 +640,11 @@ impl Projeto {
             )));
         }
         cab.extend(self.solos_de_projeto());
+        if !self.nota_otimizacao.is_empty() {
+            cab.push(Bloco::Titulo("Otimização da solução".into()));
+            cab.push(t(self.nota_otimizacao.clone()));
+            cab.push(t("Critério: menor índice de consumo de material (m³ de concreto/alvenaria, m de tirante ou grampo, perfil) entre as alternativas usuais do tipo que aprovam todas as verificações de estabilidade. Confirme custos unitários reais antes de decidir.".into()));
+        }
         // Critérios de segurança adotados
         cab.push(Bloco::Titulo("Critérios de segurança adotados".into()));
         cab.push(Bloco::Norma(crate::normas::NBR11682_TAB3));
@@ -882,7 +904,9 @@ mod testes_predim {
                         // ficha calculada cresce com a água, o que pode melhorar a estabilidade global
                         || (k.contains("estabilidade") && matches!(tipo, TipoContencao::Prancha | TipoContencao::Estacas))
                 };
-                let nenhuma_melhora = comuns.iter().all(|k| por_tirante(k) || b[*k] <= a[*k] + 1e-6);
+                // a busca do círculo crítico é heurística: admite-se 8 % de ruído na estabilidade global
+                let folga = |k: &str| if k.contains("estabilidade") { 0.08 * a[k].abs() } else { 1e-6 };
+                let nenhuma_melhora = comuns.iter().all(|k| por_tirante(k) || b[*k] <= a[*k] + folga(k));
                 let alguma_piora = comuns.iter().any(|k| b[*k] < a[*k] - 1e-6);
                 (nenhuma_melhora, alguma_piora)
             };

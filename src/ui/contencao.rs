@@ -111,6 +111,7 @@ pub fn lista_verificacoes(ui: &mut egui::Ui, res: &Resultado) {
 fn entradas(ui: &mut egui::Ui, proj: &mut Projeto, res: &Resultado) -> bool {
     let tipo = proj.tipo;
     let mut pre_dim = false;
+    let mut otimizar_pedido = false;
     let Projeto {
         geometria, empuxo, cargas, drenagem, fatores, gravidade, flexao, atirantada, prancha, estacas, grampeado, sondagem, reaterro, pre_dim_auto, ..
     } = proj;
@@ -151,10 +152,21 @@ fn entradas(ui: &mut egui::Ui, proj: &mut Projeto, res: &Resultado) -> bool {
                 }
             });
             nota(ui, regra);
-            if let Some(m) = ui.ctx().data(|d| d.get_temp::<String>(egui::Id::new(("predim_msg", tipo.arquivo())))) {
+            let chave_msg = egui::Id::new(("predim_msg", tipo.arquivo()));
+            if let Some(m) = ui.ctx().data(|d| d.get_temp::<String>(chave_msg)) {
                 let p = tema::de(ui);
-                let cor = if m.contains("Ainda não atende") { p.alerta } else { p.ok };
-                ui.label(RichText::new(m).small().color(cor));
+                let nao_atende = m.contains("Ainda não atende") || m.contains("nenhuma das");
+                let cor = if nao_atende { p.alerta } else { p.ok };
+                ui.label(RichText::new(m.clone()).small().color(cor));
+                if nao_atende && !m.starts_with("Otimização") {
+                    if ui
+                        .small_button("⚙ Otimizar: solução econômica que atende")
+                        .on_hover_text("Avalia as alternativas usuais deste tipo (base, dente, passivo, níveis, malha, perfil…) e aplica a mais econômica que aprova todas as verificações")
+                        .clicked()
+                    {
+                        otimizar_pedido = true;
+                    }
+                }
             }
         }
         if geometria.q + 1e-9 < fatores.sobrecarga_minima {
@@ -216,6 +228,16 @@ fn entradas(ui: &mut egui::Ui, proj: &mut Projeto, res: &Resultado) -> bool {
         ui_cargas(ui, cargas);
     });
     ui.add_space(20.0);
+    if otimizar_pedido {
+        let base = crate::otimizar::custo(proj);
+        let o = crate::otimizar::otimizar(proj);
+        let msg = o.mensagem(base);
+        if let Some(m) = o.melhor {
+            *proj = m.projeto;
+            proj.nota_otimizacao = msg.clone();
+        }
+        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(("predim_msg", tipo.arquivo())), msg));
+    }
     pre_dim
 }
 
