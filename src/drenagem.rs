@@ -50,7 +50,54 @@ impl MaterialFiltro {
         match self {
             MaterialFiltro::BritaGeotextil => "Brita envolta em geotêxtil",
             MaterialFiltro::Geocomposto => "Geocomposto drenante",
-            MaterialFiltro::AreiaGrossa => "Areia grossa (filtro granular)",
+            MaterialFiltro::AreiaGrossa => "Areia lavada (filtro granular)",
+        }
+    }
+}
+
+/// Areia do filtro granular (classificação granulométrica da NBR 6502).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub enum TipoAreia {
+    Grossa,
+    Media,
+}
+
+impl TipoAreia {
+    pub fn nome(&self) -> &'static str {
+        match self {
+            TipoAreia::Grossa => "Areia grossa",
+            TipoAreia::Media => "Areia média",
+        }
+    }
+    pub fn faixa(&self) -> &'static str {
+        match self {
+            TipoAreia::Grossa => "0,6 a 2,0 mm",
+            TipoAreia::Media => "0,2 a 0,6 mm",
+        }
+    }
+}
+
+/// Brita do material drenante e das bolsas dos barbacãs (graduações usuais da NBR 7211).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub enum TipoBrita {
+    N1,
+    N2,
+    N3,
+}
+
+impl TipoBrita {
+    pub fn nome(&self) -> &'static str {
+        match self {
+            TipoBrita::N1 => "Brita nº 1",
+            TipoBrita::N2 => "Brita nº 2",
+            TipoBrita::N3 => "Brita nº 3",
+        }
+    }
+    pub fn faixa(&self) -> &'static str {
+        match self {
+            TipoBrita::N1 => "≈ 9,5 a 19 mm",
+            TipoBrita::N2 => "≈ 19 a 25 mm",
+            TipoBrita::N3 => "≈ 25 a 38 mm",
         }
     }
 }
@@ -77,6 +124,12 @@ pub struct Drenagem {
     pub filtro: bool,
     pub material_filtro: MaterialFiltro,
     pub esp_filtro: f64,
+    /// Areia do filtro granular.
+    pub areia: TipoAreia,
+    /// Brita do material drenante e das bolsas dos barbacãs.
+    pub brita: TipoBrita,
+    /// Gramatura mínima do geotêxtil não tecido (g/m²).
+    pub gramatura: f64,
 
     pub dreno_pe: bool,
     pub diam_dreno_pe_mm: f64,
@@ -102,6 +155,9 @@ impl Default for Drenagem {
             filtro: true,
             material_filtro: MaterialFiltro::BritaGeotextil,
             esp_filtro: 0.30,
+            areia: TipoAreia::Grossa,
+            brita: TipoBrita::N2,
+            gramatura: 200.0,
             dreno_pe: true,
             diam_dreno_pe_mm: 100.0,
             canaleta_crista: true,
@@ -152,6 +208,52 @@ impl Drenagem {
         } else {
             self.condicao
         }
+    }
+
+    /// Especificação dos materiais da drenagem (memorial e notas do desenho).
+    pub fn especificacao(&self) -> Vec<String> {
+        let mut v = Vec::new();
+        if self.filtro {
+            v.push(match self.material_filtro {
+                MaterialFiltro::BritaGeotextil => format!(
+                    "Material drenante: {} ({}), limpa e lavada, de rocha sã (NBR 7211), envolta em geotêxtil não tecido agulhado de poliéster ou polipropileno com gramatura mínima de {} g/m²; espessura de {} m.",
+                    self.brita.nome(), self.brita.faixa(), format!("{:.0}", self.gramatura), fmt(self.esp_filtro)
+                ),
+                MaterialFiltro::AreiaGrossa => format!(
+                    "Material drenante: {} lavada ({}, NBR 6502), isenta de matéria orgânica, torrões e finos, lançada em camadas e adensada; espessura de {} m. Geotêxtil não tecido (≥ {} g/m²) entre a areia e o solo quando o critério de filtro não for atendido.",
+                    self.areia.nome(), self.areia.faixa(), fmt(self.esp_filtro), format!("{:.0}", self.gramatura)
+                ),
+                MaterialFiltro::Geocomposto => format!(
+                    "Material drenante: geocomposto drenante (núcleo drenante com geotêxtil não tecido filtrante de gramatura mínima {} g/m²), fixado ao paramento e ligado ao dreno de pé.",
+                    format!("{:.0}", self.gramatura)
+                ),
+            });
+        }
+        if self.barbacas {
+            v.push(format!(
+                "Barbacãs: tubo de PVC rígido Ø {} mm, caimento de {} % para fora, perfurado (furos a cada 5 cm) no trecho interno, que fica numa bolsa de {} ({}) envolta em geotêxtil ou tela de nylon; malha de {} × {} m, 1ª fila a {} m do terreno.",
+                format!("{:.0}", self.diam_barbaca_mm), fmt(self.declividade), self.brita.nome().to_lowercase(), self.brita.faixa(),
+                fmt(self.esp_h), fmt(self.esp_v), fmt(self.altura_1a_fila)
+            ));
+        }
+        if self.dreno_pe {
+            v.push(format!(
+                "Dreno de pé: tubo perfurado Ø {} mm (PVC rígido ou PEAD corrugado), envolto em {} e geotêxtil, declividade longitudinal ≥ 1 % e saída livre.",
+                format!("{:.0}", self.diam_dreno_pe_mm), self.brita.nome().to_lowercase()
+            ));
+        }
+        if self.canaleta_crista {
+            v.push("Canaletas de crista e de pé: concreto, seção trapezoidal 0,20 × 0,20 m (paredes de 5 cm), com desnível mínimo de 5 cm até a borda para garantir o acesso da água.".into());
+        }
+        if self.dhp {
+            v.push(format!(
+                "DHP: tubo perfurado envolvido por filtro (geotêxtil), {} m de comprimento a cada {} m, com leve inclinação para fora.",
+                fmt(self.dhp_comprimento), fmt(self.dhp_espacamento)
+            ));
+        }
+        v.push("Topo do material drenante selado com solo argiloso compactado (≈ 0,3 m).".into());
+        v.push("Critérios de filtro (Terzaghi/Cedergren — Maccaferri, Manual Técnico, 4.4.3): D15(filtro) < 5·D85(solo) ; 4·D15(solo) < D15(filtro) < 20·D15(solo) ; D50(filtro) < 25·D50(solo). Se a granulometria do material não atender, envolver com geotêxtil.".into());
+        v
     }
 
     /// Alturas (acima da base) das filas de barbacãs.
@@ -358,8 +460,8 @@ impl Drenagem {
             );
             if self.material_filtro != MaterialFiltro::Geocomposto {
                 r.formula(
-                    "Critérios de filtro (Terzaghi) — conferir com a granulometria do solo e do material drenante",
-                    "Retenção: D15,f / D85,s ≤ 4 a 5 ;  Permeabilidade: D15,f / D15,s ≥ 4 a 5",
+                    "Critérios de filtro (Terzaghi/Cedergren) — conferir com a granulometria do solo e do material drenante",
+                    "D15,f < 5·D85,s ;  4·D15,s < D15,f < 20·D15,s ;  D50,f < 25·D50,s",
                     "D15,f = diâmetro a 15 % do filtro ;  D85,s e D15,s = diâmetros do solo protegido",
                     "Com geotêxtil envolvendo a brita, a retenção é dada pela abertura de filtração do geotêxtil",
                 );
@@ -382,6 +484,10 @@ impl Drenagem {
         }
         if self.canaleta_crista {
             r.linha("Canaleta de crista: 1,0 m/m, interceptando o escoamento superficial a montante.");
+        }
+        r.titulo("Detalhamento construtivo — materiais da drenagem");
+        for l in self.especificacao() {
+            r.linha(l);
         }
         if self.dhp {
             r.formula(

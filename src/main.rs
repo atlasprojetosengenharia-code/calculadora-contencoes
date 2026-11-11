@@ -22,6 +22,7 @@ mod normas;
 mod pdf;
 mod projeto;
 mod raster;
+mod reaterro;
 mod resultado;
 mod sobre;
 mod solo;

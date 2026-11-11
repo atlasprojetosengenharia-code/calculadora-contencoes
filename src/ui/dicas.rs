@@ -161,6 +161,19 @@ fn texto(r: &str) -> Option<&'static str> {
         // ---------------- Drenagem ----------------
         "Dimensionar o aço de cada tirante pela tração (NBR 5629)" => "Calcula, para cada nível, a carga de trabalho Ft e adota a menor             barra (ou feixe de cordoalhas) comercial com 0,9·fyk·As/FS ≥ Ft (NBR 5629, 4.5.2.1). O comprimento do bulbo é sempre             calculado por L = FS·Ft/(π·D·qs). Desligado, vale a área de aço informada para todos os níveis.",
         "Dimensionar barra e comprimento pela tração (NBR 16920-2)" => "Calcula a tração em cada grampo, T = (Ka·σ'v − 2c·√Ka)·Sh·Sv,             adota a menor barra CA-50 com Rtd ≥ FS·T e o comprimento L = distância até o plano de ruptura + FS·T/(π·D·qs), em múltiplos             de 0,5 m, aumentando-o até a cunha atender ao FS mínimo. Desligado, valem o L e o Ø informados.",
+        "Especificar o material do reaterro compactado" => "Define o solo do tardoz dos muros como reaterro compactado de material \
+            especificado (em vez do perfil natural da sondagem): tipo de solo e NSPT equivalente fornecem γ, φ' e c' pelas correlações do SPT. \
+            Entra no empuxo, no peso do solo sobre a sapata e na estabilidade global.",
+        "NSPT equivalente do reaterro" => "Resistência do solo compactado, expressa como NSPT equivalente. Com o tipo de solo, define γ, φ' e c' do tardoz \
+            (Teixeira/Godoy). Reaterros bem compactados de areia argilosa costumam equivaler a NSPT de 8 a 12.",
+        "Grau de compactação mínimo" => "Grau de compactação mínimo do reaterro, em % da massa específica seca máxima do Proctor Normal (NBR 7182). \
+            Usual: 95 %. Verificado em campo por camada (frasco de areia, NBR 7185).",
+        "Espessura das camadas" => "Espessura da camada solta antes da compactação. Camadas de 20 cm garantem a energia de compactação com sapos e \
+            placas junto ao muro; o Maccaferri recomenda no máximo 25 cm.",
+        "Faixa de compactação leve junto à estrutura" => "Largura da faixa junto ao paramento compactada só com equipamento manual (sapo, placa), para não \
+            sobrecarregar a estrutura durante a obra. Usual: 1,0 m.",
+        "Gramatura do geotêxtil" => "Massa por área do geotêxtil não tecido que envolve a brita ou separa a areia do solo. Quanto maior, maior a resistência \
+            ao punçoamento e à colmatação; o mínimo usual é 200 g/m².",
         "Lâmina d'água / altura contida" => "Fração da altura contida com água atrás da estrutura. Define o empuxo hidrostático (γw·hw²/2) e reduz o peso do solo             (γ'). Em 'parcial' é a lâmina residual de um sistema que funciona mal; em 'sem drenagem', 1,0 = aterro saturado até a             crista (pior caso). No solo grampeado entra como poropressão no plano de ruptura.",
         "Barbacãs" => "Tubos que atravessam o paramento para escoar a água do tardoz. Reduzem a pressão hidrostática.",
         "Diâmetro (tubo PVC)" => "Diâmetro dos barbacãs (usual 75 a 100 mm).",

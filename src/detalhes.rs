@@ -84,7 +84,7 @@ fn barbaca(d: &mut Desenho, cx: f64, cy: f64, k: f64, dr: &Drenagem) {
     // legendas com chamadas
     d.texto(t(-1.35, 0.40), format!("TUBO DE PVC BARBACÃ Ø {} mm", format!("{:.0}", dr.diam_barbaca_mm)));
     d.linha(Estilo::Cota, vec![t(-1.00, 0.32), t(-0.55, eixo(-0.55) + r)]);
-    d.texto(t(0.55, 0.85), "MATERIAL DRENANTE");
+    d.texto(t(0.55, 0.85), format!("MATERIAL DRENANTE — {}", dr.brita.nome().to_uppercase()));
     d.linha(Estilo::Cota, vec![t(0.40, 0.78), t(0.30, 0.20)]);
     d.texto(t(0.70, -0.60), "GEOTÊXTIL OU TELA DE NYLON");
     d.linha(Estilo::Cota, vec![t(0.55, -0.54), t(0.50, -0.34)]);

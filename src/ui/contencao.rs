@@ -5,7 +5,9 @@ use super::tema;
 use super::widgets::{cartao, chip, croqui_gravidade, grade, nota, num, titulo};
 use crate::concreto::Concreto;
 use crate::desenho;
-use crate::drenagem::{Condicao, Drenagem, MaterialFiltro};
+use crate::drenagem::{Condicao, Drenagem, MaterialFiltro, TipoAreia, TipoBrita};
+use crate::reaterro::Reaterro;
+use crate::spt::{Sondagem, TIPOS};
 use crate::empuxo::{ParamEmpuxo, Teoria};
 use crate::fatores::Fatores;
 use crate::projeto::{Projeto, TipoContencao, TIPOS_CONTENCAO};
@@ -110,7 +112,7 @@ fn entradas(ui: &mut egui::Ui, proj: &mut Projeto, res: &Resultado) -> bool {
     let tipo = proj.tipo;
     let mut pre_dim = false;
     let Projeto {
-        geometria, empuxo, cargas, drenagem, fatores, gravidade, flexao, atirantada, prancha, estacas, grampeado, sondagem, pre_dim_auto, ..
+        geometria, empuxo, cargas, drenagem, fatores, gravidade, flexao, atirantada, prancha, estacas, grampeado, sondagem, reaterro, pre_dim_auto, ..
     } = proj;
 
     cartao(ui, |ui| {
@@ -190,6 +192,18 @@ fn entradas(ui: &mut egui::Ui, proj: &mut Projeto, res: &Resultado) -> bool {
         }
     });
     ui.add_space(10.0);
+
+    if matches!(tipo, TipoContencao::Gravidade | TipoContencao::Flexao) {
+        cartao(ui, |ui| {
+            titulo(ui, "Reaterro do tardoz e solo de apoio");
+            let z_base = match tipo {
+                TipoContencao::Gravidade => geometria.h + gravidade.f,
+                _ => geometria.h,
+            };
+            ui_reaterro(ui, reaterro, sondagem, z_base);
+        });
+        ui.add_space(10.0);
+    }
 
     cartao(ui, |ui| {
         titulo(ui, "Drenagem");
@@ -575,6 +589,44 @@ fn det_grampeado(ui: &mut egui::Ui, g: &mut SoloGrampeado) {
     concreto(ui, "gram_c", &mut g.concreto);
 }
 
+fn ui_reaterro(ui: &mut egui::Ui, r: &mut Reaterro, s: &Sondagem, z_base: f64) {
+    super::widgets::caixa(ui, &mut r.usar, "Especificar o material do reaterro compactado");
+    if r.usar {
+        ui.horizontal(|ui| {
+            super::widgets::rotulo(ui, "   Tipo de solo:");
+            egui::ComboBox::from_id_salt("rea_tipo").selected_text(r.tipo.nome()).show_ui(ui, |ui| {
+                for t in TIPOS {
+                    ui.selectable_value(&mut r.tipo, t, t.nome());
+                }
+            });
+        });
+        grade(ui, "rea", |ui| {
+            num(ui, "   NSPT equivalente do reaterro", &mut r.nspt, "golpes", 1.0..=40.0, 0.5);
+            num(ui, "   Grau de compactação mínimo", &mut r.gc_min, "% PN", 85.0..=105.0, 0.5);
+            num(ui, "   Espessura das camadas", &mut r.camada_cm, "cm", 10.0..=40.0, 1.0);
+            num(ui, "   Faixa de compactação leve junto à estrutura", &mut r.faixa_leve_m, "m", 0.0..=3.0, 0.1);
+        });
+        let (g, _, c, phi) = r.parametros(s);
+        nota(ui, &format!("Tardoz: γ = {} kN/m³ ; φ' = {}° ; c' = {} kPa (correlações com o SPT, como na sondagem)", fmt(g), fmt(phi), fmt(c)));
+    } else {
+        nota(ui, "Sem especificação: o tardoz usa o perfil da sondagem.");
+    }
+    if let Some(c) = s.camada_em(z_base + 0.01) {
+        nota(
+            ui,
+            &format!(
+                "Solo de apoio da base (z = {} m): {} — NSPT = {} ; γ = {} ; φ' = {}° ; c' = {} kPa",
+                fmt(z_base),
+                c.tipo.nome().to_lowercase(),
+                fmt(c.nspt),
+                fmt(c.gamma),
+                fmt(c.phi),
+                fmt(c.c)
+            ),
+        );
+    }
+}
+
 fn ui_drenagem(ui: &mut egui::Ui, d: &mut Drenagem, tipo: TipoContencao) {
     ui.label("Condição adotada no cálculo:");
     for c in [Condicao::Drenada, Condicao::Parcial, Condicao::SemDrenagem] {
@@ -624,8 +676,32 @@ fn ui_drenagem(ui: &mut egui::Ui, d: &mut Drenagem, tipo: TipoContencao) {
                 }
             });
         });
+        match d.material_filtro {
+            MaterialFiltro::AreiaGrossa => {
+                ui.horizontal(|ui| {
+                    super::widgets::rotulo(ui, "   Tipo de areia:");
+                    egui::ComboBox::from_id_salt("areia").selected_text(d.areia.nome()).show_ui(ui, |ui| {
+                        for a in [TipoAreia::Grossa, TipoAreia::Media] {
+                            ui.selectable_value(&mut d.areia, a, format!("{} ({})", a.nome(), a.faixa()));
+                        }
+                    });
+                });
+            }
+            MaterialFiltro::BritaGeotextil => {
+                ui.horizontal(|ui| {
+                    super::widgets::rotulo(ui, "   Brita:");
+                    egui::ComboBox::from_id_salt("brita").selected_text(d.brita.nome()).show_ui(ui, |ui| {
+                        for b in [TipoBrita::N1, TipoBrita::N2, TipoBrita::N3] {
+                            ui.selectable_value(&mut d.brita, b, format!("{} ({})", b.nome(), b.faixa()));
+                        }
+                    });
+                });
+            }
+            MaterialFiltro::Geocomposto => {}
+        }
         grade(ui, "filt", |ui| {
             num(ui, "   Espessura", &mut d.esp_filtro, "m", 0.02..=1.5, 0.01);
+            num(ui, "   Gramatura do geotêxtil", &mut d.gramatura, "g/m²", 100.0..=600.0, 10.0);
         });
     }
     ui.horizontal(|ui| {

@@ -3,6 +3,7 @@
 //! Salvo em arquivo `.ctc` (JSON).
 
 use crate::drenagem::Drenagem;
+use crate::reaterro::Reaterro;
 use crate::empuxo::{rad, ParamEmpuxo};
 use crate::fatores::Fatores;
 use crate::resultado::{fmt, Bloco, Formula, Resultado};
@@ -126,6 +127,9 @@ pub struct Projeto {
     pub responsavel: String,
     pub tipo: TipoContencao,
     pub sondagem: Sondagem,
+    /// Reaterro compactado do tardoz (muros); projetos antigos abrem sem especificação.
+    #[serde(default = "Reaterro::legado")]
+    pub reaterro: Reaterro,
     pub geometria: Geometria,
     pub cargas: Cargas,
     pub empuxo: ParamEmpuxo,
@@ -166,6 +170,7 @@ impl Default for Projeto {
             responsavel: String::new(),
             tipo: TipoContencao::Gravidade,
             sondagem: Sondagem::default(),
+            reaterro: Reaterro::default(),
             geometria: Geometria::default(),
             cargas: Cargas::default(),
             empuxo: ParamEmpuxo::default(),
@@ -347,7 +352,89 @@ impl Projeto {
 
     fn perfil_calc(&self) -> crate::solo::Perfil {
         let na = self.drenagem.na_efetivo(self.sondagem.na(), self.altura_contida(), self.tipo);
+        // muros: o tardoz é reaterro compactado de material especificado
+        if self.reaterro.usar && matches!(self.tipo, TipoContencao::Gravidade | TipoContencao::Flexao) {
+            return self.reaterro.perfil(&self.sondagem, na);
+        }
         self.sondagem.perfil(na)
+    }
+
+    /// Cota de assentamento da base (profundidade na sondagem, m).
+    pub fn z_base(&self) -> f64 {
+        match self.tipo {
+            TipoContencao::Gravidade => self.geometria.h + self.gravidade.f,
+            _ => self.geometria.h,
+        }
+    }
+
+    /// Seção do memorial com o SPT do solo de apoio e do tardoz.
+    fn solos_de_projeto(&self) -> Vec<Bloco> {
+        let t = |x: String| Bloco::Texto(x);
+        let s = &self.sondagem;
+        let camada = |z: f64| -> String {
+            match s.camada_em(z) {
+                Some(c) => format!(
+                    "{} — {} (NSPT = {}, {}), γ = {} kN/m³, φ' = {}°, c' = {} kPa",
+                    if c.descricao.is_empty() { c.tipo.nome().to_string() } else { c.descricao.clone() },
+                    c.tipo.nome().to_lowercase(),
+                    fmt(c.nspt),
+                    crate::spt::compacidade(c.tipo, c.nspt),
+                    fmt(c.gamma),
+                    fmt(c.phi),
+                    fmt(c.c)
+                ),
+                None => "não definido".into(),
+            }
+        };
+        let medio = |de: f64, ate: f64| -> f64 {
+            let n = 100;
+            (0..n).filter_map(|i| s.camada_em(de + (ate - de) * (i as f64 + 0.5) / n as f64)).map(|c| c.nspt).sum::<f64>() / n as f64
+        };
+        let mut v = vec![Bloco::Titulo("Solos de projeto — apoio da contenção e tardoz".into())];
+        match self.tipo {
+            TipoContencao::Gravidade | TipoContencao::Flexao => {
+                let z = self.z_base();
+                v.push(t(format!("Solo de apoio da base (cota de assentamento a z = {} m na sondagem {}): {}", fmt(z), s.identificacao, camada(z + 0.01))));
+            }
+            TipoContencao::Atirantada | TipoContencao::Prancha | TipoContencao::Estacas => {
+                let h = self.geometria.h;
+                v.push(t(format!("Solo no pé da escavação (z = {} m na sondagem {}): {}", fmt(h), s.identificacao, camada(h + 0.01))));
+                let ficha = if self.tipo == TipoContencao::Atirantada { self.geometria.engaste } else { 0.5 * h };
+                v.push(t(format!("Solo da ficha (z = {} a {} m): NSPT médio = {}", fmt(h), fmt(h + ficha), fmt(medio(h, h + ficha)))));
+            }
+            TipoContencao::Grampeado => {
+                v.push(t(format!("Solo do maciço grampeado (z = 0 a {} m): NSPT médio = {}", fmt(self.geometria.h), fmt(medio(0.0, self.geometria.h)))));
+            }
+        }
+        match self.tipo {
+            TipoContencao::Gravidade | TipoContencao::Flexao if self.reaterro.usar => {
+                let (g, _, c, phi) = self.reaterro.parametros(s);
+                v.push(t(format!(
+                    "Solo do tardoz: reaterro compactado, {} (NSPT equivalente = {}, {}), γ = {} kN/m³, φ' = {}°, c' = {} kPa — ver o detalhamento do reaterro.",
+                    self.reaterro.tipo.nome().to_lowercase(),
+                    fmt(self.reaterro.nspt),
+                    crate::spt::compacidade(self.reaterro.tipo, self.reaterro.nspt),
+                    fmt(g),
+                    fmt(phi),
+                    fmt(c)
+                )));
+            }
+            TipoContencao::Gravidade | TipoContencao::Flexao => {
+                v.push(t(format!(
+                    "Solo do tardoz: perfil da sondagem (z = 0 a {} m), NSPT médio = {} — reaterro compactado não especificado.",
+                    fmt(self.altura_contida()),
+                    fmt(medio(0.0, self.altura_contida()))
+                )));
+            }
+            _ => {
+                v.push(t(format!(
+                    "Solo do tardoz: terreno natural da sondagem (z = 0 a {} m), NSPT médio = {}.",
+                    fmt(self.altura_contida()),
+                    fmt(medio(0.0, self.altura_contida()))
+                )));
+            }
+        }
+        v
     }
 
     fn fundacao_em(&self, z: f64, base: &SoloFundacao) -> SoloFundacao {
@@ -452,6 +539,17 @@ impl Projeto {
         };
         self.drenagem_no_resultado(&mut r);
         r.desenho.hachurar_solos();
+        if self.reaterro.usar && matches!(self.tipo, TipoContencao::Gravidade | TipoContencao::Flexao) {
+            r.titulo("Detalhamento construtivo — reaterro compactado do tardoz");
+            for l in self.reaterro.especificacao(&self.sondagem) {
+                r.linha(l);
+            }
+            if !self.reaterro.tipo.granular() {
+                r.aviso("Reaterro coesivo: prefira material granular, que drena melhor e reduz o empuxo; confirme a drenagem do tardoz.");
+            }
+        } else if matches!(self.tipo, TipoContencao::Gravidade | TipoContencao::Flexao) {
+            r.aviso("Reaterro do tardoz não especificado: adotado o perfil da sondagem. Defina o material compactado (tipo de solo, NSPT, grau de compactação).");
+        }
 
         // Cabeçalho do memorial
         let t = |x: String| Bloco::Texto(x);
@@ -523,6 +621,7 @@ impl Projeto {
                 fmt(g), fmt(p), fmt(c)
             )));
         }
+        cab.extend(self.solos_de_projeto());
         // Critérios de segurança adotados
         cab.push(Bloco::Titulo("Critérios de segurança adotados".into()));
         cab.push(Bloco::Norma(crate::normas::NBR11682_TAB3));
@@ -933,6 +1032,34 @@ mod testes_predim {
             assert!(tir.len() >= 4, "uma verificação de aço e uma de ensaio por nível");
             assert!(tir.iter().all(|v| v.ok()), "{:?}", tir.iter().filter(|v| !v.ok()).map(|v| v.texto()).collect::<Vec<_>>());
         }
+    }
+
+    #[test]
+    fn memorial_traz_spt_do_apoio_do_tardoz_e_materiais() {
+        for tipo in TIPOS_CONTENCAO {
+            let mut p = Projeto::default();
+            p.tipo = tipo;
+            p.geometria.h = 5.0;
+            let t = p.calcular().texto_completo("teste");
+            assert!(t.contains("Solos de projeto") && t.contains("NSPT"), "{}: sem SPT de apoio/tardoz", tipo.nome());
+            assert!(t.contains("Solo do tardoz"), "{}", tipo.nome());
+            if matches!(tipo, TipoContencao::Gravidade | TipoContencao::Flexao | TipoContencao::Atirantada | TipoContencao::Grampeado) {
+                assert!(t.contains("Material drenante") && t.contains("Brita nº 2"), "{}: sem materiais da drenagem", tipo.nome());
+            }
+            if matches!(tipo, TipoContencao::Gravidade | TipoContencao::Flexao) {
+                assert!(t.contains("camadas de 20 cm") && t.contains("reaterro compactado"), "{}", tipo.nome());
+            }
+        }
+        // o reaterro especificado altera o empuxo (areia compactada x argila mole)
+        let fs = |p: &Projeto| p.calcular().verificacoes.iter().find(|v| v.nome.starts_with("FS tombamento")).unwrap().valor;
+        let mut a = Projeto::default();
+        a.tipo = TipoContencao::Gravidade;
+        a.geometria.h = 4.0;
+        a.pre_dimensionar();
+        let mut b = a.clone();
+        b.reaterro.tipo = crate::spt::TipoSolo::Areia;
+        b.reaterro.nspt = 25.0;
+        assert!(fs(&b) > fs(&a), "areia compacta no tardoz deve melhorar o tombamento");
     }
 
     /// Auxiliar de desenvolvimento: grava o DXF de cada tipo
