@@ -41,7 +41,19 @@ fn cor(estilo: Estilo, escuro: bool) -> (Color32, Stroke) {
         Estilo::Barbaca => (Color32::from_rgb(40, 140, 220), s(3.0, Color32::from_rgb(40, 140, 220))),
         Estilo::Armadura => (Color32::TRANSPARENT, s(2.2, Color32::from_rgb(200, 30, 60))),
         Estilo::ArmaduraSecao => (Color32::from_rgb(200, 30, 60), s(1.0, Color32::from_rgb(140, 10, 40))),
+        Estilo::Hachura => (
+            Color32::TRANSPARENT,
+            s(
+                0.6,
+                if escuro { Color32::from_rgba_unmultiplied(220, 220, 220, 90) } else { Color32::from_rgba_unmultiplied(70, 55, 35, 120) },
+            ),
+        ),
     }
+}
+
+/// Cor e traço do estilo no tema claro (rasterização para o .docx).
+pub(crate) fn cor_claro(estilo: Estilo) -> (Color32, Stroke) {
+    cor(estilo, false)
 }
 
 pub fn pintar(ui: &mut egui::Ui, d: &Desenho, altura: f32) {

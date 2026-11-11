@@ -200,7 +200,8 @@ fn conteudo() -> Vec<B> {
            camada por elemento. No AutoCAD, abra o arquivo e use “Salvar como” para gerar o .dwg."),
         I("🌐 Exportar relatório (.html) — relatório visual com seção, fórmulas, normas e status; imprima ou salve em \
            PDF pelo navegador."),
-        I("💾 Exportar memorial (.txt) e 📋 Copiar memorial — texto puro para anexar ou colar em outro documento."),
+        I("📄 Exportar memorial (.docx) — documento do Word com a seção, fórmulas, normas, verificações e tabela de armação.            A margem superior é folgada e o cabeçalho vem vazio: aplique o papel timbrado do escritório no Word."),
+        I("📋 Copiar memorial — texto puro para colar em outro documento."),
 
         Cap("9. Central de normas"),
         P("A Central de normas (tela inicial ou barra superior) lista as normas usadas nos cálculos, com os itens \

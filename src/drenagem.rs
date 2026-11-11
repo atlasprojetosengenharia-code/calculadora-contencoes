@@ -182,7 +182,15 @@ impl Drenagem {
             return;
         }
         let e = self.esp_filtro;
-        d.poli(Estilo::Dreno, vec![p0, [p0[0] + e, p0[1]], [p1[0] + e, p1[1]], p1]);
+        let quad = vec![p0, [p0[0] + e, p0[1]], [p1[0] + e, p1[1]], p1];
+        d.poli(Estilo::Dreno, quad.clone());
+        if e >= 0.12 {
+            match self.material_filtro {
+                MaterialFiltro::AreiaGrossa => d.pontilhado(&quad, e / 4.0),
+                MaterialFiltro::BritaGeotextil => d.pedras(&quad, e * 0.3),
+                MaterialFiltro::Geocomposto => {}
+            }
+        }
         if self.dreno_pe {
             let r = (self.diam_dreno_pe_mm / 1000.0).max(0.06);
             d.circulo(Estilo::Barbaca, [p0[0] + e / 2.0, p0[1] + r * 1.4], r);

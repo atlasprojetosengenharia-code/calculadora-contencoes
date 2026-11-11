@@ -35,8 +35,11 @@ pub fn mostrar(ui: &mut egui::Ui, proj: &Projeto, res: &Resultado) -> Option<Str
                     .add_filter("Desenho DXF (AutoCAD)", &["dxf"])
                     .save_file()
                 {
+                    // detalhes da drenagem (barbacã e canaleta) ao lado da seção
+                    let mut desenho_dxf = res.desenho.clone();
+                    crate::detalhes::anexar(&mut desenho_dxf, &proj.drenagem, proj.tipo);
                     let dxf = crate::dxf::gerar(
-                        &res.desenho,
+                        &desenho_dxf,
                         &res.armaduras,
                         &titulo_memorial,
                         &super::memorial::notas_detalhamento(res),
@@ -67,16 +70,24 @@ pub fn mostrar(ui: &mut egui::Ui, proj: &Projeto, res: &Resultado) -> Option<Str
                     });
                 }
             }
-            if ui.button("💾 Exportar memorial (.txt)").clicked() {
-                let nome = format!("memorial_{}.txt", proj.tipo.arquivo());
+            if ui
+                .button("📄 Exportar memorial (.docx)")
+                .on_hover_text("Documento do Word com margem superior folgada e cabeçalho vazio: aplique o papel timbrado do escritório")
+                .clicked()
+            {
+                let nome = format!("memorial_{}.docx", proj.tipo.arquivo());
                 if let Some(arq) = rfd::FileDialog::new()
                     .set_title("Salvar memorial de cálculo")
                     .set_file_name(&nome)
-                    .add_filter("Texto", &["txt"])
+                    .add_filter("Documento do Word", &["docx"])
                     .save_file()
                 {
-                    msg = Some(match std::fs::write(&arq, res.texto_completo(&titulo_memorial)) {
-                        Ok(_) => format!("Memorial salvo em {}", arq.display()),
+                    let docx = crate::docx::gerar(res, &titulo_memorial, &crate::sobre::versao_completa(), &res.desenho);
+                    msg = Some(match std::fs::write(&arq, docx) {
+                        Ok(_) => {
+                            let _ = std::process::Command::new("explorer").arg(&arq).spawn();
+                            format!("Memorial salvo em {}", arq.display())
+                        }
                         Err(e) => format!("Erro ao salvar: {e}"),
                     });
                 }

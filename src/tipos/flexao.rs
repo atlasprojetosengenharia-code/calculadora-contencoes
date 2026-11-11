@@ -512,8 +512,23 @@ impl MuroFlexao {
         let pmax = diag.iter().map(|p| p.1.abs()).fold(1e-6, f64::max);
         d.diagrama(b, 0.3 * h / pmax, diag);
         d.texto([b + 0.2 * h, -0.08 * h], format!("p máx = {} kPa", fmt(pmax)));
-        d.texto([xi * 0.6, h * 0.5], format!("H = {} m", fmt(h)));
-        d.texto([b / 2.0, -0.18 * h], format!("B = {} m", fmt(b)));
+        // cotas (cm), como nas pranchas de detalhamento
+        let sz = 0.03 * h;
+        let cm = |v: f64| format!("{:.0}", v * 100.0);
+        let (y1, y2) = (-0.10 * h, -0.20 * h);
+        d.cota_h(0.0, bp, y1, 0.0, sz, cm(bp));
+        d.cota_h(bp, bp + tb, y1, 0.0, sz, cm(tb));
+        d.cota_h(bp + tb, b, y1, 0.0, sz, cm(b - bp - tb));
+        d.cota_h(0.0, b, y2, 0.0, sz, cm(b));
+        d.cota_h(bp, bp + tt, h + 0.18 * h, h, sz, cm(tt));
+        let xv = -0.10 * h;
+        d.cota_v(0.0, hs, xv, 0.0, sz, cm(hs));
+        d.cota_v(hs, h, xv, bp, sz, cm(h - hs));
+        if self.df > 0.0 {
+            d.cota_v(0.0, self.df, -0.22 * h, 0.0, sz, cm(self.df));
+        }
+        d.nivel(xi, self.df.max(0.0), sz, "NÍVEL 01  ±0,00");
+        d.nivel(xi, h, sz, format!("NÍVEL 02  +{}", fmt(h - self.df.max(0.0))));
         d
     }
 }

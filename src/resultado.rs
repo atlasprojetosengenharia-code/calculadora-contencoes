@@ -132,9 +132,67 @@ pub enum Estilo {
     Armadura,
     /// Barra de armadura em seção (ponto).
     ArmaduraSecao,
+    /// Hachuras e texturas de materiais (solo, pedra, concreto, areia, brita).
+    Hachura,
 }
 
 /// Polígono CONVEXO em coordenadas do mundo (m), x → direita, y ↑.
+/// Gerador pseudo-aleatório determinístico (texturas estáveis entre quadros).
+struct Lcg(u32);
+
+impl Lcg {
+    fn prox(&mut self) -> f64 {
+        self.0 = self.0.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        (self.0 >> 8) as f64 / (1u32 << 24) as f64
+    }
+}
+
+fn limites(pts: &[[f64; 2]]) -> (f64, f64, f64, f64) {
+    pts.iter().fold((f64::MAX, f64::MIN, f64::MAX, f64::MIN), |a, p| (a.0.min(p[0]), a.1.max(p[0]), a.2.min(p[1]), a.3.max(p[1])))
+}
+
+fn sentido(pts: &[[f64; 2]]) -> f64 {
+    let a: f64 = (0..pts.len())
+        .map(|i| {
+            let (p, q) = (pts[i], pts[(i + 1) % pts.len()]);
+            p[0] * q[1] - q[0] * p[1]
+        })
+        .sum();
+    if a >= 0.0 { 1.0 } else { -1.0 }
+}
+
+/// Recorta a reta `o + t·d` pelo polígono convexo (Cyrus-Beck): intervalo de `t`.
+fn recorta_convexo(pts: &[[f64; 2]], o: [f64; 2], d: [f64; 2]) -> Option<(f64, f64)> {
+    let sg = sentido(pts);
+    let (mut t0, mut t1) = (-1e9f64, 1e9f64);
+    for i in 0..pts.len() {
+        let (a, b) = (pts[i], pts[(i + 1) % pts.len()]);
+        let n = [-(b[1] - a[1]) * sg, (b[0] - a[0]) * sg];
+        let num = n[0] * (o[0] - a[0]) + n[1] * (o[1] - a[1]);
+        let den = n[0] * d[0] + n[1] * d[1];
+        if den.abs() < 1e-12 {
+            if num < 0.0 {
+                return None;
+            }
+        } else {
+            let t = -num / den;
+            if den > 0.0 { t0 = t0.max(t) } else { t1 = t1.min(t) }
+        }
+    }
+    (t1 > t0).then_some((t0, t1))
+}
+
+/// O ponto está dentro do polígono convexo, com folga `margem` das arestas?
+fn dentro_convexo(pts: &[[f64; 2]], p: [f64; 2], margem: f64) -> bool {
+    let sg = sentido(pts);
+    (0..pts.len()).all(|i| {
+        let (a, b) = (pts[i], pts[(i + 1) % pts.len()]);
+        let n = [-(b[1] - a[1]) * sg, (b[0] - a[0]) * sg];
+        let len = (n[0] * n[0] + n[1] * n[1]).sqrt().max(1e-12);
+        (n[0] * (p[0] - a[0]) + n[1] * (p[1] - a[1])) / len >= margem
+    })
+}
+
 #[derive(Clone, Debug)]
 pub struct Poligono {
     pub pontos: Vec<[f64; 2]>,
@@ -191,6 +249,160 @@ impl Desenho {
     }
     pub fn retangulo(&mut self, estilo: Estilo, x0: f64, y0: f64, x1: f64, y1: f64) {
         self.poli(estilo, vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1]]);
+    }
+
+    // ---- desenho técnico: texturas, cotas, níveis e canaletas -------------------
+
+    /// Hachura com retas de ângulo `ang` (graus) e espaçamento `esp` (m),
+    /// recortada pelo polígono convexo `pts`.
+    pub fn hachura(&mut self, pts: &[[f64; 2]], ang: f64, esp: f64) {
+        if pts.len() < 3 || esp <= 0.0 {
+            return;
+        }
+        let th = ang.to_radians();
+        let d = [th.cos(), th.sin()];
+        let u = [-th.sin(), th.cos()];
+        let proj: Vec<f64> = pts.iter().map(|p| p[0] * u[0] + p[1] * u[1]).collect();
+        let (mn, mx) = proj.iter().fold((f64::MAX, f64::MIN), |a, &v| (a.0.min(v), a.1.max(v)));
+        if !(mx - mn).is_finite() || (mx - mn) / esp > 400.0 {
+            return;
+        }
+        let mut c = mn + esp / 2.0;
+        while c < mx {
+            let o = [c * u[0], c * u[1]];
+            if let Some((t0, t1)) = recorta_convexo(pts, o, d) {
+                self.linha(
+                    Estilo::Hachura,
+                    vec![[o[0] + t0 * d[0], o[1] + t0 * d[1]], [o[0] + t1 * d[0], o[1] + t1 * d[1]]],
+                );
+            }
+            c += esp;
+        }
+    }
+
+    /// Pedras irregulares (hexágonos) inteiras dentro do polígono convexo — alvenaria
+    /// de pedra, concreto ciclópico e brita.
+    pub fn pedras(&mut self, pts: &[[f64; 2]], tam: f64) {
+        if pts.len() < 3 || tam <= 0.0 {
+            return;
+        }
+        let (x0, x1, y0, y1) = limites(pts);
+        let mut rng = Lcg(0x9E37_79B9);
+        let mut aceitas: Vec<([f64; 2], f64)> = Vec::new();
+        for _ in 0..1200 {
+            if aceitas.len() >= 260 {
+                break;
+            }
+            let r = tam * (0.32 + 0.22 * rng.prox());
+            let c = [x0 + rng.prox() * (x1 - x0), y0 + rng.prox() * (y1 - y0)];
+            if !dentro_convexo(pts, c, 1.2 * r) {
+                continue;
+            }
+            if aceitas.iter().any(|(q, rq)| ((c[0] - q[0]).powi(2) + (c[1] - q[1]).powi(2)).sqrt() < 1.08 * (r + rq)) {
+                continue;
+            }
+            aceitas.push((c, r));
+            let rot = rng.prox() * std::f64::consts::TAU;
+            let raios: Vec<f64> = (0..6).map(|_| r * (0.8 + 0.3 * rng.prox())).collect();
+            let anel: Vec<[f64; 2]> = (0..=6)
+                .map(|i| {
+                    let k = i % 6;
+                    let a = rot + std::f64::consts::TAU * k as f64 / 6.0;
+                    [c[0] + raios[k] * a.cos(), c[1] + raios[k] * a.sin()]
+                })
+                .collect();
+            self.linha(Estilo::Hachura, anel);
+        }
+    }
+
+    /// Pontilhado (concreto, areia): pequenos traços em grade com deslocamento pseudo-aleatório.
+    pub fn pontilhado(&mut self, pts: &[[f64; 2]], esp: f64) {
+        if pts.len() < 3 || esp <= 0.0 {
+            return;
+        }
+        let (x0, x1, y0, y1) = limites(pts);
+        if ((x1 - x0) / esp) * ((y1 - y0) / esp) > 3000.0 {
+            return;
+        }
+        let mut rng = Lcg(0x85EB_CA6B);
+        let mut y = y0 + esp / 2.0;
+        while y < y1 {
+            let mut x = x0 + esp / 2.0;
+            while x < x1 {
+                let p = [x + (rng.prox() - 0.5) * 0.8 * esp, y + (rng.prox() - 0.5) * 0.8 * esp];
+                if dentro_convexo(pts, p, 0.1 * esp) {
+                    let l = 0.22 * esp;
+                    self.linha(Estilo::Hachura, vec![p, [p[0] + l, p[1] + 0.3 * l]]);
+                }
+                x += esp;
+            }
+            y += esp;
+        }
+    }
+
+    /// Cota horizontal em `y` entre `x0` e `x1`; as linhas de extensão partem de `y_ref`.
+    /// `sz` é a unidade de escala (≈ altura do texto, m).
+    pub fn cota_h(&mut self, x0: f64, x1: f64, y: f64, y_ref: f64, sz: f64, texto: impl Into<String>) {
+        let s = if y >= y_ref { 1.0 } else { -1.0 };
+        for x in [x0, x1] {
+            self.linha(Estilo::Cota, vec![[x, y_ref + s * 0.3 * sz], [x, y + s * 0.5 * sz]]);
+            self.linha(Estilo::Cota, vec![[x - 0.35 * sz, y - 0.35 * sz], [x + 0.35 * sz, y + 0.35 * sz]]);
+        }
+        self.linha(Estilo::Cota, vec![[x0, y], [x1, y]]);
+        self.texto([(x0 + x1) / 2.0, y + s * 1.0 * sz], texto);
+    }
+
+    /// Cota vertical em `x` entre `y0` e `y1`; as linhas de extensão partem de `x_ref`.
+    pub fn cota_v(&mut self, y0: f64, y1: f64, x: f64, x_ref: f64, sz: f64, texto: impl Into<String>) {
+        let s = if x >= x_ref { 1.0 } else { -1.0 };
+        let t: String = texto.into();
+        for y in [y0, y1] {
+            self.linha(Estilo::Cota, vec![[x_ref + s * 0.3 * sz, y], [x + s * 0.5 * sz, y]]);
+            self.linha(Estilo::Cota, vec![[x - 0.35 * sz, y - 0.35 * sz], [x + 0.35 * sz, y + 0.35 * sz]]);
+        }
+        self.linha(Estilo::Cota, vec![[x, y0], [x, y1]]);
+        self.texto([x + s * (0.7 * sz + 0.3 * sz * t.chars().count() as f64), (y0 + y1) / 2.0], t);
+    }
+
+    /// Marca de nível (triângulo sobre a linha de cota) com legenda.
+    pub fn nivel(&mut self, x: f64, y: f64, sz: f64, texto: impl Into<String>) {
+        self.linha(Estilo::Cota, vec![[x, y], [x + 7.0 * sz, y]]);
+        self.poli(Estilo::Cota, vec![[x, y], [x - 0.6 * sz, y + 1.0 * sz], [x + 0.6 * sz, y + 1.0 * sz]]);
+        self.texto([x + 3.6 * sz, y + 1.0 * sz], texto);
+    }
+
+    /// Canaleta de concreto (seção trapezoidal 0,20 × 0,20 m, paredes de 5 cm) com o topo em `y`.
+    pub fn canaleta(&mut self, xc: f64, y: f64) {
+        let ext = vec![[xc - 0.15, y], [xc - 0.10, y - 0.25], [xc + 0.10, y - 0.25], [xc + 0.15, y]];
+        let int = vec![[xc - 0.10, y], [xc - 0.075, y - 0.20], [xc + 0.075, y - 0.20], [xc + 0.10, y]];
+        let mut e = ext.clone();
+        e.push(ext[0]);
+        self.linha(Estilo::Concreto, e);
+        self.linha(Estilo::Concreto, int);
+    }
+
+    /// Hachura o solo (45°) e a fundação (135°) de qualquer desenho já montado.
+    pub fn hachurar_solos(&mut self) {
+        let solos: Vec<(Vec<[f64; 2]>, bool)> = self
+            .poligonos
+            .iter()
+            .filter(|p| matches!(p.estilo, Estilo::Solo | Estilo::SoloFundacao))
+            .map(|p| (p.pontos.clone(), p.estilo == Estilo::SoloFundacao))
+            .collect();
+        if solos.is_empty() {
+            return;
+        }
+        let todos: Vec<[f64; 2]> = solos.iter().flat_map(|(p, _)| p.iter().copied()).collect();
+        let (x0, x1, y0, y1) = limites(&todos);
+        let diag = ((x1 - x0).powi(2) + (y1 - y0).powi(2)).sqrt();
+        let esp = diag / 60.0;
+        for (p, fund) in solos {
+            if fund {
+                self.hachura(&p, 135.0, esp * 1.6);
+            } else {
+                self.hachura(&p, 45.0, esp);
+            }
+        }
     }
 
     /// Diagrama de pressões desenhado em faixas trapezoidais (sempre convexas).

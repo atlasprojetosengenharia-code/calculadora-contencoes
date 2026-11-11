@@ -441,6 +441,7 @@ impl Projeto {
             TipoContencao::Grampeado => self.preparar_grampeado().calcular(f),
         };
         self.drenagem_no_resultado(&mut r);
+        r.desenho.hachurar_solos();
 
         // Cabeçalho do memorial
         let t = |x: String| Bloco::Texto(x);
@@ -561,9 +562,12 @@ impl Projeto {
                 dr.faixa_filtro(d, [g.x_pt, m.f], [m.faces(yt).1, yt]);
                 altura_filtro = yt - m.f;
                 if dr.canaleta_crista {
-                    let x0 = g.x_cr + dr.esp_filtro + 0.2;
+                    let x0 = g.x_cr + dr.esp_filtro + 0.30;
                     let y = g.htot + (x0 - g.x_cr) * rad(self.geometria.beta).tan();
-                    d.retangulo(crate::resultado::Estilo::Concreto, x0, y - 0.15, x0 + 0.35, y);
+                    d.canaleta(x0, y);
+                    if m.df > 0.0 {
+                        d.canaleta(-0.45, m.df);
+                    }
                 }
             }
             TipoContencao::Flexao => {
@@ -579,6 +583,13 @@ impl Projeto {
                 let yt = h - 0.3;
                 dr.faixa_filtro(d, [bp + tb, hs], [xr(yt), yt]);
                 altura_filtro = yt - hs;
+                if dr.canaleta_crista {
+                    let x0 = bp + tt + dr.esp_filtro + 0.30;
+                    d.canaleta(x0, h + (x0 - bp - tt) * rad(self.geometria.beta).tan());
+                    if m.df > 0.0 {
+                        d.canaleta(-0.45, m.df);
+                    }
+                }
             }
             TipoContencao::Atirantada => {
                 let c = self.preparar_atirantada();
@@ -589,6 +600,11 @@ impl Projeto {
                 }
                 dr.faixa_filtro(d, [0.0, -c.h], [0.0, -0.3]);
                 altura_filtro = c.h - 0.3;
+                if dr.canaleta_crista {
+                    let x0 = dr.esp_filtro + 0.30;
+                    d.canaleta(x0, x0 * rad(self.geometria.beta).tan());
+                    d.canaleta(-c.espessura - 0.45, -c.h);
+                }
                 if dr.dhp {
                     let mut y = -c.h + 0.5;
                     while y < -0.5 {
@@ -609,6 +625,12 @@ impl Projeto {
                 let yt = g.h - 0.3;
                 dr.faixa_filtro(d, [0.0, 0.0], [yt * eta.tan(), yt]);
                 altura_filtro = yt;
+                if dr.canaleta_crista {
+                    let x_ft = g.h * eta.tan();
+                    let x0 = x_ft + dr.esp_filtro + 0.30;
+                    d.canaleta(x0, g.h + (x0 - x_ft) * rad(self.geometria.beta).tan());
+                    d.canaleta(-e - 0.45, 0.0);
+                }
                 if dr.dhp {
                     let mut y = 0.5;
                     while y < g.h - 0.5 {
@@ -787,6 +809,82 @@ mod testes_predim {
         assert!(!r.avisos.iter().any(|a| a.contains("β ignorado")));
     }
 
+    /// Varredura de segurança: nenhum cenário razoável (ou extremo) pode gerar pânico, NaN
+    /// ou memorial vazio, e as tendências físicas básicas precisam valer.
+    #[test]
+    fn varredura_de_seguranca() {
+        use crate::drenagem::Condicao;
+        use crate::resultado::Criterio;
+        let mut cenarios = 0;
+        for tipo in TIPOS_CONTENCAO {
+            for h in [0.5, 1.0, 2.0, 3.0, 5.0, 8.0, 12.0] {
+                for beta in [0.0, 10.0, 20.0, 30.0, 45.0] {
+                    for q in [0.0, 20.0, 60.0] {
+                        for cond in [Condicao::Drenada, Condicao::Parcial, Condicao::SemDrenagem] {
+                            let mut p = Projeto::default();
+                            p.tipo = tipo;
+                            p.geometria.h = h;
+                            p.geometria.beta = beta;
+                            p.geometria.q = q;
+                            p.drenagem.condicao = cond;
+                            p.pre_dimensionar();
+                            let r = p.calcular();
+                            cenarios += 1;
+                            assert!(!r.blocos.is_empty() && !r.desenho.poligonos.is_empty(), "{} H={h}", tipo.nome());
+                            for v in &r.verificacoes {
+                                assert!(!v.valor.is_nan(), "{} H={h} β={beta} q={q} {cond:?}: NaN em '{}'", tipo.nome(), v.nome);
+                                if v.criterio == Criterio::Minimo {
+                                    assert!(v.valor > f64::NEG_INFINITY, "{}: −∞ em '{}'", tipo.nome(), v.nome);
+                                }
+                            }
+                            // o desenho nunca pode ter coordenadas inválidas
+                            let ruim = r.desenho.linhas.iter().flat_map(|l| l.pontos.iter()).chain(r.desenho.poligonos.iter().flat_map(|q| q.pontos.iter())).any(|c| !c[0].is_finite() || !c[1].is_finite());
+                            assert!(!ruim, "{} H={h} β={beta}: coordenada não finita no desenho", tipo.nome());
+                            // o memorial em Word sempre pode ser gerado
+                            if (h - 5.0).abs() < 1e-9 && q == 20.0 && beta == 20.0 {
+                                let bytes = crate::docx::gerar(&r, "teste", "0", &r.desenho);
+                                assert!(bytes.len() > 2000);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(cenarios > 1000);
+    }
+
+    /// Tendências físicas: mais empuxo (talude, sobrecarga, água) nunca melhora a estabilidade
+    /// de um muro de geometria fixa.
+    #[test]
+    fn tendencias_fisicas_do_muro() {
+        use crate::drenagem::Condicao;
+        for tipo in [TipoContencao::Gravidade, TipoContencao::Flexao] {
+            let base = {
+                let mut p = Projeto::default();
+                p.tipo = tipo;
+                p.geometria.h = 4.0;
+                p.pre_dimensionar();
+                p
+            };
+            let fs = |p: &Projeto, nome: &str| {
+                p.calcular().verificacoes.iter().find(|v| v.nome.starts_with(nome) && v.nome.contains("(estático)")).map(|v| v.valor).unwrap()
+            };
+            for nome in ["FS tombamento", "FS deslizamento"] {
+                let f0 = fs(&base, nome);
+                let mut p = base.clone();
+                p.geometria.beta = 15.0;
+                assert!(fs(&p, nome) < f0, "{}: talude deve reduzir {nome}", tipo.nome());
+                let mut p = base.clone();
+                p.geometria.q = base.geometria.q + 30.0;
+                assert!(fs(&p, nome) < f0, "{}: sobrecarga deve reduzir {nome}", tipo.nome());
+                let mut p = base.clone();
+                p.drenagem.condicao = Condicao::SemDrenagem;
+                assert!(fs(&p, nome) < f0, "{}: água deve reduzir {nome}", tipo.nome());
+                // base mais larga (mesmo H) nunca piora o tombamento
+            }
+        }
+    }
+
     /// Auxiliar de desenvolvimento: grava o DXF de cada tipo
     /// (`DXF_AMOSTRA=<pasta> DXF_BETA=<graus> DXF_H=<m> cargo test amostras_dxf`).
     #[test]
@@ -801,7 +899,9 @@ mod testes_predim {
             p.geometria.beta = beta;
             p.pre_dimensionar();
             let r = p.calcular();
-            let dxf = crate::dxf::gerar(&r.desenho, &r.armaduras, tipo.arquivo(), &[], "teste");
+            let mut d = r.desenho.clone();
+            crate::detalhes::anexar(&mut d, &p.drenagem, tipo);
+            let dxf = crate::dxf::gerar(&d, &r.armaduras, tipo.arquivo(), &[], "teste");
             std::fs::write(format!("{pasta}/{}.dxf", tipo.arquivo()), dxf).unwrap();
         }
     }

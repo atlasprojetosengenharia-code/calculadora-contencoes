@@ -814,6 +814,23 @@ impl MuroGravidade {
             d.texto([x0 + self.dente_b / 2.0, -self.dente_h - 0.06 * ht], "dente");
         }
         d.poli(Estilo::Concreto, vec![[g.x_pf, f], [g.x_pt, f], [g.x_cr, ht], [g.x_cl, ht]]);
+        // textura do material (corpo e base)
+        let corpo = vec![[g.x_pf, f], [g.x_pt, f], [g.x_cr, ht], [g.x_cl, ht]];
+        let base_pol = vec![[0.0, 0.0], [b, 0.0], [b, f], [0.0, f]];
+        for pol in [&corpo, &base_pol] {
+            match self.material {
+                Material::PedraArgamassada | Material::PedraSeca => d.pedras(pol, 0.07 * ht),
+                Material::Gabiao => {
+                    d.hachura(pol, 0.0, 0.5);
+                    d.pedras(pol, 0.04 * ht);
+                }
+                Material::ConcretoCiclopico => {
+                    d.pontilhado(pol, 0.04 * ht);
+                    d.pedras(pol, 0.05 * ht);
+                }
+                Material::ConcretoSimples => d.pontilhado(pol, 0.035 * ht),
+            }
+        }
 
         if self.coroamento && self.coroa_aplicavel() {
             let hc = self.coroamento_h.min(0.5 * self.h);
@@ -822,7 +839,7 @@ impl MuroGravidade {
             for (x, y) in [(g.x_cl + c, ht - hc + c), (g.x_cr - c, ht - hc + c), (g.x_cl + c, ht - c), (g.x_cr - c, ht - c)] {
                 d.circulo(Estilo::ArmaduraSecao, [x, y], 0.012 * ht.max(1.0));
             }
-            d.texto([(g.x_cl + g.x_cr) / 2.0, ht + 0.16 * ht], "coroamento");
+            d.texto([(g.x_cl + g.x_cr) / 2.0, ht + 0.40 * ht], "coroamento");
         }
         if let Some(na) = self.aterro.na() {
             let y = ht - na;
@@ -848,16 +865,32 @@ impl MuroGravidade {
         d.diagrama(b + 1.4 * ht * 0.55, 0.3 * ht / pmax, &pts);
         d.texto([b + 0.95 * ht, -0.08 * ht], format!("p máx = {} kPa", fmt(pmax)));
 
-        // cotas do croqui (A..F, H)
-        let c = ht * 0.05;
-        d.texto([g.x_pf / 2.0, f + c], format!("A={}", fmt(self.ressalto_frente)));
-        d.texto([(g.x_pf + g.x_cl) / 2.0 - 2.0 * c, (f + ht) / 2.0], format!("B={}", fmt(self.proj_frente)));
-        d.texto([(g.x_cl + g.x_cr) / 2.0, ht + 1.2 * c], format!("C={}", fmt(self.crista)));
-        d.texto([(g.x_pt + b) / 2.0 + 0.5, f + c], format!("E={}", fmt(self.ressalto_tras)));
-        d.texto([b / 2.0, -0.12 * ht], format!("Base = {} m", fmt(b)));
-        d.texto([xi * 0.45, f / 2.0], format!("F = {}", fmt(f)));
-        d.tracejada(Estilo::Cota, vec![[xi * 0.2, f], [xi * 0.2, ht]]);
-        d.texto([xi * 0.55, (f + ht) / 2.0], format!("H = {} m", fmt(self.h)));
+        // cotas (cm), como nas pranchas de detalhamento
+        let sz = 0.03 * ht;
+        let cm = |v: f64| format!("{:.0}", v * 100.0);
+        let (y1, y2) = (-0.10 * ht, -0.20 * ht);
+        let cadeia = [
+            (0.0, g.x_pf),
+            (g.x_pf, g.x_cl),
+            (g.x_cl, g.x_cr),
+            (g.x_cr, g.x_pt),
+            (g.x_pt, b),
+        ];
+        for (xa, xb) in cadeia {
+            if xb - xa > 0.005 {
+                d.cota_h(xa, xb, y1, 0.0, sz, cm(xb - xa));
+            }
+        }
+        d.cota_h(0.0, b, y2, 0.0, sz, cm(b));
+        d.cota_h(g.x_cl, g.x_cr, ht + 0.18 * ht, ht, sz, cm(self.crista));
+        let xv = -0.10 * ht;
+        d.cota_v(0.0, f, xv, 0.0, sz, cm(f));
+        d.cota_v(f, ht, xv, g.x_cl, sz, cm(self.h));
+        if self.df > 0.0 {
+            d.cota_v(0.0, self.df, -0.22 * ht, 0.0, sz, cm(self.df));
+        }
+        d.nivel(xi, self.df.max(0.0), sz, "NÍVEL 01  ±0,00");
+        d.nivel(xi, ht, sz, format!("NÍVEL 02  +{}", fmt(ht - self.df.max(0.0))));
         d
     }
 }
