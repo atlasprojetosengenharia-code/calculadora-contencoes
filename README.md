@@ -11,6 +11,15 @@ flexão, cortina atirantada, estaca-prancha, parede de estacas e solo grampeado.
 - Memorial de cálculo visual: fórmulas passo a passo, referências normativas e status de cada verificação; relatório HTML (imprimível em PDF) e texto
 - Projetos salvos em `.ctc`
 
+## Informações
+
+| | |
+|---|---|
+| Linguagem | **Rust** (edição 2024) |
+| Interface | egui / eframe (aplicativo desktop nativo, Windows) |
+| Licença | **Proprietária** — todos os direitos reservados (ver [LICENSE](LICENSE)) |
+| Titular | Atlas Projetos e Engenharia LTDA — https://www.atlasprojetos.eng.br |
+
 ## Download
 
 Cada versão lançada (tag `vX.Y.Z`) é publicada no

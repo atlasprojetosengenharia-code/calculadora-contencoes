@@ -23,3 +23,6 @@ que emite a ART.
 
 Software proprietário — este repositório contém apenas os arquivos de
 distribuição. Todos os direitos reservados.
+
+- Linguagem: Rust (edição 2024), interface egui/eframe
+- Licença: proprietária (all rights reserved) — Atlas Projetos e Engenharia LTDA
