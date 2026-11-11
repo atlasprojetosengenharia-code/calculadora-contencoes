@@ -480,7 +480,7 @@ impl EstacaPrancha {
         if let Some(s) = &s {
             self.detalhamento(&mut r, s);
         }
-        r.aviso("Estabilidade global (NBR 11682) e ruptura de fundo ainda não implementadas.");
+        r.aviso("Ruptura de fundo da escavação ainda não implementada (a estabilidade global circular é verificada à parte).");
         r.desenho = self.parede.desenho(s.as_ref(), 0.012 * self.parede.h.max(4.0), Estilo::Aco);
         // viga de travamento (chapéu) envolvendo o topo das pranchas
         r.desenho.retangulo(Estilo::Concreto, -0.20, -self.viga_h, 0.20, 0.0);
@@ -564,7 +564,7 @@ impl ParedeEstacas {
             r.aviso("Espaçamento > 3D: verificar efeito de arco do solo entre estacas e necessidade de parede entre estacas.");
         }
         r.aviso("Empuxo passivo calculado como parede contínua; para estacas espaçadas a largura efetiva do passivo é limitada (≈ 3D).");
-        r.aviso("Estabilidade global (NBR 11682) e ruptura de fundo ainda não implementadas.");
+        r.aviso("Ruptura de fundo da escavação ainda não implementada (a estabilidade global circular é verificada à parte).");
         r.desenho = self.parede.desenho(s.as_ref(), self.diametro, Estilo::Concreto);
         // viga de travamento (coroamento) sobre as estacas
         let bv = (self.diametro + 0.20).max(0.40);

@@ -14,6 +14,7 @@ mod dxf;
 mod empuxo;
 mod estabilidade;
 mod fatores;
+mod global;
 mod manual;
 mod marca;
 mod materiais;

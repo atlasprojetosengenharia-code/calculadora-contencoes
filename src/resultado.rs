@@ -449,6 +449,8 @@ pub struct Resultado {
     pub desenho: Desenho,
     /// Tabela de armação (detalhamento do aço).
     pub armaduras: Vec<crate::armadura::Armadura>,
+    /// Reforços (tirantes/grampos) para a estabilidade global.
+    pub reforcos: Vec<crate::global::Reforco>,
 }
 
 impl Resultado {

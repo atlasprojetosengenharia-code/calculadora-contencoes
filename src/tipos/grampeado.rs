@@ -299,6 +299,24 @@ impl SoloGrampeado {
             );
         }
 
+        // reforços para a estabilidade global (capacidades admissíveis)
+        {
+            let (eta, inc, fsg) = (rad(self.incl_face), rad(self.incl_grampo), fat.fs_grampo_interna);
+            r.reforcos = zs
+                .iter()
+                .map(|&z| {
+                    let y = self.h - z;
+                    crate::global::Reforco {
+                        p0: [y * eta.tan(), y],
+                        dir: [inc.cos(), -inc.sin()],
+                        comprimento: self.comprimento,
+                        livre: 0.0,
+                        arr_por_m: PI * self.diam_furo * self.qs / (fsg * self.sh),
+                        aco: rt / fsg / self.sh,
+                    }
+                })
+                .collect();
+        }
         let sem = self.busca(&[], false, gm);
         // Estabilidade por cunhas
         r.titulo("Estabilidade — cunhas planas pelo pé");

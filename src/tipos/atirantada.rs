@@ -379,6 +379,19 @@ impl CortinaAtirantada {
         }
         let t_max = tirantes.iter().map(|t| t.carga).fold(0.0, f64::max);
         r.verif(Verificacao::info("Carga de trabalho máxima Ft", t_max, "kN"));
+        // reforços para a estabilidade global (capacidades admissíveis)
+        let fsb = fat.fs_tirante_bulbo();
+        r.reforcos = tirantes
+            .iter()
+            .map(|t| crate::global::Reforco {
+                p0: [0.0, -t.z],
+                dir: [incl.cos(), -incl.sin()],
+                comprimento: t.l_livre + t.l_bulbo,
+                livre: t.l_livre,
+                arr_por_m: PI * self.diam_furo * self.qs / (fsb * self.espac_h),
+                aco: t.t_adm / self.espac_h,
+            })
+            .collect();
         // Ensaios de recebimento — NBR 5629 Tabela D.1
         let (fa, fb, ta, tb) = if perm { (1.75, 1.40, "A", "B") } else { (1.50, 1.20, "C", "D") };
         r.linha(format!(
