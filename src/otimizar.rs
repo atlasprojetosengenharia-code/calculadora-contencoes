@@ -288,7 +288,13 @@ mod testes {
 
     #[test]
     fn otimizador_encontra_solucao_que_atende_ou_explica() {
-        for tipo in crate::projeto::TIPOS_CONTENCAO {
+        // em modo debug (CI) só dois tipos: sem otimização o Bishop é ~20x mais lento
+        let tipos: Vec<TipoContencao> = if cfg!(debug_assertions) {
+            vec![TipoContencao::Gravidade, TipoContencao::Prancha]
+        } else {
+            crate::projeto::TIPOS_CONTENCAO.to_vec()
+        };
+        for tipo in tipos {
             let mut p = Projeto::default();
             p.tipo = tipo;
             p.geometria.h = 4.0;
