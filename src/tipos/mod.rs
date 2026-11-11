@@ -3,6 +3,7 @@ pub mod embutida;
 pub mod flexao;
 pub mod grampeado;
 pub mod gravidade;
+pub mod misto;
 
 #[cfg(test)]
 mod fumaca {

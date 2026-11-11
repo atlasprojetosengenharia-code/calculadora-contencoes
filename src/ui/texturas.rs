@@ -16,9 +16,11 @@ pub enum Tex {
     Silte,
     Pedra,
     Gabiao,
+    /// Blocos estruturais de concreto em amarração (ladrilho = 2 blocos × 4 fiadas = 0,8 m).
+    Blocos,
 }
 
-pub const TODAS: [Tex; 9] = [Tex::Concreto, Tex::Brita, Tex::Geotextil, Tex::SoloEscuro, Tex::Argila, Tex::Areia, Tex::Silte, Tex::Pedra, Tex::Gabiao];
+pub const TODAS: [Tex; 10] = [Tex::Concreto, Tex::Brita, Tex::Geotextil, Tex::SoloEscuro, Tex::Argila, Tex::Areia, Tex::Silte, Tex::Pedra, Tex::Gabiao, Tex::Blocos];
 
 // ---------- ruído repetível ----------
 
@@ -221,6 +223,25 @@ fn gerar(t: Tex) -> Vec<[f32; 3]> {
             let det = fbm(u, v, 48, 3, 84);
             mult([0.52, 0.47, 0.40], tom * (0.85 + 0.30 * det) * (1.08 - 0.25 * d1))
         }),
+        Tex::Blocos => imagem(|u, v, i, j| {
+            // 4 fiadas de 19 cm + junta de 1 cm ; blocos de 39 cm + junta, desencontrados meia peça
+            let fiada = (v * 4.0).floor();
+            let fv = v * 4.0 - fiada;
+            let desloc = if fiada as i64 % 2 == 1 { 0.25 } else { 0.0 };
+            let fu = ((u + desloc) * 2.0).fract();
+            let junta_h = fv < 0.05;
+            let junta_v = fu < 0.025;
+            if junta_h || junta_v {
+                let a = 0.74 + 0.04 * fbm(u, v, 64, 2, 101);
+                return [a, a * 0.99, a * 0.96];
+            }
+            let bloco = ((u + desloc) * 2.0).floor() as i64 + 7 * fiada as i64;
+            let tom = 0.60 + 0.06 * hash(bloco, 5, 102);
+            let g = hash(i as i64, j as i64, 103);
+            let poro = if g > 0.985 { 0.75 } else { 1.0 };
+            let c = tom * (0.94 + 0.10 * fbm(u, v, 48, 3, 104)) * (0.95 + 0.08 * g) * poro;
+            [c, c, c * 0.98]
+        }),
         Tex::Gabiao => imagem(|u, v, _, _| {
             // malha hexagonal de arame (aprox. losangos) sobre pedras de mão
             let (a, b) = ((u + v) * 8.0, (u - v + 1.0) * 8.0);
@@ -246,7 +267,7 @@ fn gerar(t: Tex) -> Vec<[f32; 3]> {
 /// que é usada e guardada para o resto da sessão.
 pub fn pixels(t: Tex) -> &'static [[u8; 3]] {
     use std::sync::OnceLock;
-    static CACHE: [OnceLock<Vec<[u8; 3]>>; 9] = [const { OnceLock::new() }; 9];
+    static CACHE: [OnceLock<Vec<[u8; 3]>>; 10] = [const { OnceLock::new() }; 10];
     let i = TODAS.iter().position(|x| *x == t).unwrap_or(0);
     CACHE[i].get_or_init(|| {
         gerar(t).into_iter().map(|c| [(c[0].clamp(0.0, 1.0) * 255.0) as u8, (c[1].clamp(0.0, 1.0) * 255.0) as u8, (c[2].clamp(0.0, 1.0) * 255.0) as u8]).collect()

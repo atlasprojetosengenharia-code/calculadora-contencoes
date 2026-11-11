@@ -25,6 +25,7 @@ pub enum Material {
     Brita,
     Areia,
     Geocomposto,
+    Bloco,
     SoloArgila,
     SoloAreia,
     SoloSilte,
@@ -46,6 +47,7 @@ impl Material {
             Material::Brita => "Brita envolta em geotêxtil",
             Material::Areia => "Areia grossa (filtro)",
             Material::Geocomposto => "Geocomposto drenante",
+            Material::Bloco => "Alvenaria estrutural de blocos de concreto",
             Material::SoloArgila => "Solo argiloso (corte)",
             Material::SoloAreia => "Solo arenoso (corte)",
             Material::SoloSilte => "Solo siltoso (corte)",
@@ -67,6 +69,7 @@ impl Material {
             Material::Brita => [0.56, 0.56, 0.57],
             Material::Areia => [0.83, 0.72, 0.52],
             Material::Geocomposto => [0.12, 0.12, 0.13],
+            Material::Bloco => [0.66, 0.66, 0.64],
             Material::SoloArgila => [0.72, 0.43, 0.25],
             Material::SoloAreia => [0.82, 0.70, 0.50],
             Material::SoloSilte => [0.66, 0.53, 0.36],
@@ -98,6 +101,8 @@ pub enum Classe {
     Canaleta,
     /// Viga de travamento (longarina) de parede ancorada.
     Viga,
+    /// Pilar de concreto armado (muro misto).
+    Pilar,
 }
 
 #[derive(Clone, Debug)]
@@ -391,6 +396,52 @@ impl Modelo3d {
                         classe: Classe::Sapata,
                         material: mat,
                         forma: ext(&vec![[x0, -g.dente_h], [x0 + g.dente_b, -g.dente_h], [x0 + g.dente_b, 0.0], [x0, 0.0]]),
+                    });
+                }
+            }
+            TipoContencao::Flexao if p.flexao.sistema == crate::tipos::misto::Sistema::Misto => {
+                // misto: sapata + painel de blocos + pilares + viga de respaldo
+                let fx = p.preparar_flexao();
+                let mi = &fx.misto;
+                let (bp, hs, ht) = (fx.b_ponta, fx.h_sapata, fx.h);
+                if let Some(s) = m.muros.first() {
+                    s.iter().for_each(|q| amplia(q[0]));
+                    md.pecas.push(Peca { nome: "Sapata corrida (concreto armado)".into(), classe: Classe::Sapata, material: Material::Concreto, forma: ext(s) });
+                }
+                let hv = 0.19; // viga de respaldo em canaleta (altura de uma fiada)
+                md.pecas.push(Peca {
+                    nome: format!("Painel de alvenaria estrutural (bloco de {} cm)", fmt0(100.0 * mi.bloco)),
+                    classe: Classe::Muro,
+                    material: Material::Bloco,
+                    forma: ext(&vec![[bp, hs], [bp + mi.bloco, hs], [bp + mi.bloco, ht - hv], [bp, ht - hv]]),
+                });
+                md.pecas.push(Peca {
+                    nome: "Viga de respaldo (concreto armado)".into(),
+                    classe: Classe::Viga,
+                    material: Material::Concreto,
+                    forma: ext(&vec![[bp - 0.005, ht - hv], [bp + mi.bloco, ht - hv], [bp + mi.bloco, ht], [bp - 0.005, ht]]),
+                });
+                amplia(bp + mi.pilar_h);
+                for (k, z) in posicoes(l, mi.espac_pilar).into_iter().enumerate() {
+                    // face externa 5 mm à frente do painel (sem disputa de pixel)
+                    md.pecas.push(Peca {
+                        nome: format!("Pilar P{} {} × {} cm (concreto armado)", k + 1, fmt0(100.0 * mi.pilar_b), fmt0(100.0 * mi.pilar_h)),
+                        classe: Classe::Pilar,
+                        material: Material::Concreto,
+                        forma: Forma::Extrusao {
+                            secao: vec![[bp - 0.005, hs], [bp + mi.pilar_h, hs], [bp + mi.pilar_h, ht - hv], [bp - 0.005, ht - hv]],
+                            z0: (z - mi.pilar_b / 2.0).max(0.0),
+                            z1: (z + mi.pilar_b / 2.0).min(l),
+                        },
+                    });
+                }
+                if fx.dente && fx.dente_h > 0.0 {
+                    let xc = bp + fx.t_base / 2.0;
+                    md.pecas.push(Peca {
+                        nome: "Dente de base (concreto armado)".into(),
+                        classe: Classe::Sapata,
+                        material: Material::Concreto,
+                        forma: ext(&vec![[xc - fx.dente_b / 2.0, -fx.dente_h], [xc + fx.dente_b / 2.0, -fx.dente_h], [xc + fx.dente_b / 2.0, 0.0], [xc - fx.dente_b / 2.0, 0.0]]),
                     });
                 }
             }

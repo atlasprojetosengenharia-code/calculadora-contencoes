@@ -68,6 +68,7 @@ fn textura_de(m: Material, normal: [f64; 3]) -> Option<(super::texturas::Tex, f6
         Material::Bulbo => (Tex::Concreto, 0.8, [0.95, 0.95, 0.92]),
         Material::Pedra => (Tex::Pedra, 1.4, branco),
         Material::Gabiao => (Tex::Gabiao, 1.0, branco),
+        Material::Bloco => (Tex::Blocos, 0.8, branco),
         // bolsa de brita envolta em manta: manta por fora, brita nas faces cortadas
         Material::Brita => {
             if normal[2].abs() > 0.9 { (Tex::Brita, 0.45, branco) } else { (Tex::Geotextil, 0.6, branco) }
@@ -484,6 +485,29 @@ mod amostra_gravidade {
                 let px: Vec<u8> = img.pixels.iter().flat_map(|c| [c.r(), c.g(), c.b()]).collect();
                 std::fs::write(format!("{pasta}/grav_{nome}_{v}.png"), crate::raster::Imagem { w: 900, h: 600, px }.png()).unwrap();
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod amostra_misto {
+    use super::*;
+    #[test]
+    #[ignore]
+    fn misto() {
+        let Ok(pasta) = std::env::var("PASTA_3D") else { return };
+        let mut p = Projeto::default();
+        p.tipo = crate::projeto::TipoContencao::Flexao;
+        p.geometria.h = 2.5;
+        p.pre_dimensionar();
+        p.flexao.sistema = crate::tipos::misto::Sistema::Misto;
+        p.flexao.misto.espac_pilar = 2.0;
+        let r = p.calcular();
+        for (v, corte, az, el) in [("frente", false, 0.85f32, 0.30f32), ("corte", true, 0.35, 0.35)] {
+            let cena = Cena::montar(1, Modelo3d::montar(&p, &r, 9.0, corte));
+            let img = cena.rasterizar(900, 600, &Camera { azimute: az, elevacao: el, zoom: 1.2, corte, ..Camera::default() }, Color32::from_rgb(236, 240, 245), 1.0);
+            let px: Vec<u8> = img.pixels.iter().flat_map(|c| [c.r(), c.g(), c.b()]).collect();
+            std::fs::write(format!("{pasta}/misto_{v}.png"), crate::raster::Imagem { w: 900, h: 600, px }.png()).unwrap();
         }
     }
 }

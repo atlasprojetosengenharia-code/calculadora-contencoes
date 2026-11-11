@@ -516,9 +516,47 @@ fn det_gravidade(ui: &mut egui::Ui, m: &mut MuroGravidade, h: f64) {
 }
 
 fn det_flexao(ui: &mut egui::Ui, m: &mut MuroFlexao) {
+    use crate::tipos::misto::{Sistema, BLOCOS, FBK};
+    ui.horizontal_wrapped(|ui| {
+        super::widgets::rotulo(ui, "Sistema estrutural");
+        egui::ComboBox::from_id_salt("sistema_flexao").selected_text(m.sistema.nome()).width(300.0).show_ui(ui, |ui| {
+            for s in [Sistema::ConcretoArmado, Sistema::Misto] {
+                ui.selectable_value(&mut m.sistema, s, s.nome());
+            }
+        })
+        .response
+        .on_hover_text(super::dicas::dica("Sistema estrutural").unwrap_or_default());
+    });
+    if m.sistema == Sistema::Misto {
+        let mi = &mut m.misto;
+        grade(ui, "flex_misto", |ui| {
+            super::widgets::rotulo(ui, "Bloco estrutural");
+            let atual = BLOCOS.iter().find(|b| (b.0 - mi.bloco).abs() < 1e-6).map(|b| b.1).unwrap_or("—");
+            egui::ComboBox::from_id_salt("bloco_misto").selected_text(atual).width(240.0).show_ui(ui, |ui| {
+                for (t, nome) in BLOCOS {
+                    ui.selectable_value(&mut mi.bloco, t, nome);
+                }
+            });
+            ui.end_row();
+            super::widgets::rotulo(ui, "Resistência do bloco fbk");
+            egui::ComboBox::from_id_salt("fbk_misto").selected_text(format!("{} MPa", fmt(mi.fbk))).width(120.0).show_ui(ui, |ui| {
+                for f in FBK {
+                    ui.selectable_value(&mut mi.fbk, f, format!("{} MPa", fmt(f)));
+                }
+            });
+            ui.end_row();
+            num(ui, "Espaçamento entre pilares (eixos)", &mut mi.espac_pilar, "m", 1.5..=6.0, 0.05);
+            num(ui, "Largura do pilar (ao longo do muro)", &mut mi.pilar_b, "m", 0.14..=0.80, 0.01);
+            num(ui, "Altura da seção do pilar (para o aterro)", &mut mi.pilar_h, "m", 0.14..=1.20, 0.01);
+            num(ui, "Canaletas armadas a cada", &mut mi.esp_canaleta, "m", 0.20..=1.20, 0.20);
+        });
+        ui.label(RichText::new("Na estabilidade, a parede entra com espessura e peso equivalentes (blocos + pilares distribuídos).").small().color(tema::de(ui).fraco));
+    }
     grade(ui, "flex", |ui| {
-        num(ui, "Espessura da parede (topo)", &mut m.t_topo, "m", 0.12..=1.5, 0.01);
-        num(ui, "Espessura da parede (base)", &mut m.t_base, "m", 0.12..=2.0, 0.01);
+        if m.sistema == Sistema::ConcretoArmado {
+            num(ui, "Espessura da parede (topo)", &mut m.t_topo, "m", 0.12..=1.5, 0.01);
+            num(ui, "Espessura da parede (base)", &mut m.t_base, "m", 0.12..=2.0, 0.01);
+        }
         num(ui, "Espessura da sapata", &mut m.h_sapata, "m", 0.2..=2.0, 0.01);
         num(ui, "Comprimento da ponta", &mut m.b_ponta, "m", 0.0..=6.0, 0.01);
         num(ui, "Comprimento do talão", &mut m.b_talao, "m", 0.0..=10.0, 0.01);

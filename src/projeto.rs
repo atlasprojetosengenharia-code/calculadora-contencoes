@@ -564,6 +564,12 @@ impl Projeto {
         m.concreto.peso = crate::materiais::CONCRETO_ARMADO;
         // altura total (sapata incluída) = altura livre + embutimento
         m.h = self.geometria.h + self.geometria.engaste.max(0.0);
+        // sistema misto: parede equivalente (alvenaria + pilares distribuídos) na estabilidade
+        if m.sistema == crate::tipos::misto::Sistema::Misto {
+            let t = m.misto.t_equivalente();
+            m.t_topo = t;
+            m.t_base = t;
+        }
         m.df = self.geometria.engaste;
         m.aterro = self.perfil_calc();
         m.reaterro = self.reaterro.usar;

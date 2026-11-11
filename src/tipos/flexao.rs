@@ -9,6 +9,7 @@ use crate::fatores::Fatores;
 use crate::normas;
 use crate::resultado::{fmt, Desenho, Estilo, Resultado, Verificacao};
 use crate::solo::{Cargas, Perfil, SoloFundacao};
+use super::misto::{DimMisto, Misto, Sistema};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -37,6 +38,9 @@ pub struct MuroFlexao {
     pub fundacao: SoloFundacao,
     pub cargas: Cargas,
     pub empuxo: ParamEmpuxo,
+    /// Sistema estrutural da parede: concreto armado ou misto (pilares + blocos estruturais).
+    pub sistema: Sistema,
+    pub misto: Misto,
 }
 
 /// Dados do detalhamento usados no esquema das armaduras.
@@ -71,11 +75,21 @@ impl Default for MuroFlexao {
             fundacao: SoloFundacao::default(),
             cargas: Cargas::default(),
             empuxo: ParamEmpuxo::default(),
+            sistema: Sistema::ConcretoArmado,
+            misto: Misto::default(),
         }
     }
 }
 
 impl MuroFlexao {
+    /// Peso específico da parede (equivalente, no sistema misto).
+    pub fn peso_parede(&self) -> f64 {
+        match self.sistema {
+            Sistema::Misto => self.misto.gamma_equivalente(self.concreto.peso),
+            Sistema::ConcretoArmado => self.concreto.peso,
+        }
+    }
+
     fn largura(&self) -> f64 {
         self.b_ponta + self.t_base + self.b_talao
     }
@@ -110,7 +124,7 @@ impl MuroFlexao {
         base.push(Forca::nova("Peso da sapata", 0.0, w_sap, b / 2.0, hs / 2.0));
         let p_par = [[bp, hs], [x_bb, hs], [x_bt, h], [bp, h]];
         let (a, cx, cy) = centroide(&p_par);
-        let w_par = a * pc;
+        let w_par = a * self.peso_parede();
         base.push(Forca::nova("Peso da parede", 0.0, w_par, cx, cy));
         let p_solo = [[x_bb, hs], [b, hs], [b, hv], [x_bt, h]];
         let (a, sx, sy) = centroide(&p_solo);
@@ -194,8 +208,8 @@ impl MuroFlexao {
             analisar(&mut r, "sísmico", &f, None, b, &fundacao, self.df, &lim_s);
         }
 
-        let (fp, ft, fpo) = self.estrutural(&mut r, fat, &dist, hv);
-        let det = self.detalhamento(&mut r, &fp, &ft, &fpo);
+        let (fp, ft, fpo, dm) = self.estrutural(&mut r, fat, &dist, hv);
+        let det = self.detalhamento(&mut r, &fp, &ft, &fpo, dm.as_ref());
 
         self.cargas.avisar_minima(&mut r, fat.sobrecarga_minima);
         r.desenho = self.desenho(&est.diagrama, hv);
@@ -209,7 +223,7 @@ impl MuroFlexao {
         fat: &Fatores,
         dist: &crate::estabilidade::DistribuicaoBase,
         hv: f64,
-    ) -> (Flexao, Flexao, Flexao) {
+    ) -> (Flexao, Flexao, Flexao, Option<DimMisto>) {
         let c = &self.concreto;
         let (h, hs, bp, tb, tt) = (self.h, self.h_sapata, self.b_ponta, self.t_base, self.t_topo);
         let b = self.largura();
@@ -229,7 +243,16 @@ impl MuroFlexao {
         let ph = |s: f64| self.empuxo.pressao_horizontal_total(&self.aterro, &self.cargas, 0.0, z0 + s);
         let (v, sc) = integrar(ph, 0.0, hst, 400);
         let m = v * (hst - sc);
-        let fp = self.secao(r, "Parede (engaste)", m * gf, v * gf, tb, fat);
+        let mut dm = None;
+        let fp = match self.sistema {
+            Sistema::Misto => {
+                // pressão a y m acima da sapata (profundidade z0 + hst − y no plano de cálculo)
+                let p_y = |y: f64| ph((hst - y).max(0.0));
+                dm = Some(self.misto.dimensionar(r, fat, c, m, v, &p_y, hst - 0.19));
+                Flexao { as_calc: 0.0, as_min: 0.0, x_d: 0.0, viavel: true }
+            }
+            Sistema::ConcretoArmado => self.secao(r, "Parede (engaste)", m * gf, v * gf, tb, fat),
+        };
 
         // Talão
         let x_bb = bp + tb;
@@ -247,7 +270,7 @@ impl MuroFlexao {
         let mp = vp * (bp - xp);
         let fpo = self.secao(r, "Ponta (face da parede)", mp * gf, vp * gf, hs, fat);
         r.aviso("Dimensionamento estrutural feito para o caso estático (sem acréscimo sísmico na parede).");
-        (fp, ft, fpo)
+        (fp, ft, fpo, dm)
     }
 
     fn secao(&self, r: &mut Resultado, nome: &str, md: f64, vd: f64, esp: f64, fat: &Fatores) -> Flexao {
@@ -301,7 +324,7 @@ impl MuroFlexao {
     }
 
     /// Detalhamento do aço (tabela de armação) e itens construtivos.
-    fn detalhamento(&self, r: &mut Resultado, fp: &Flexao, ft: &Flexao, fpo: &Flexao) -> DetalheFlexao {
+    fn detalhamento(&self, r: &mut Resultado, fp: &Flexao, ft: &Flexao, fpo: &Flexao, dm: Option<&DimMisto>) -> DetalheFlexao {
         let c = &self.concreto;
         let (h, hs, bp, tb, tt) = (self.h, self.h_sapata, self.b_ponta, self.t_base, self.t_topo);
         let b = self.largura();
@@ -322,6 +345,54 @@ impl MuroFlexao {
         r.norma(normas::NBR6118_DISTRIBUICAO);
 
         let mut tab = Vec::new();
+        // sistema misto: pilar (longitudinal e estribos) e painel (canaletas) no lugar da parede maciça
+        let n1_misto = dm.map(|d| {
+            let mi = &self.misto;
+            let area = |phi: f64| std::f64::consts::PI * phi * phi / 400.0;
+            let n1 = Armadura {
+                pos: "N1".into(),
+                elemento: "Pilar — longitudinal (face do aterro)".into(),
+                bitola_mm: d.phi_pilar,
+                espac_cm: None,
+                quantidade: format!("{} por pilar", d.n_barras),
+                comprimento_m: h - hs - cob,
+                as_nec: d.as_pilar,
+                as_ef: d.n_barras as f64 * area(d.phi_pilar),
+                unidade: "cm²",
+                lb_cm: lb(d.phi_pilar, true),
+                forma: Forma::Reta,
+            };
+            tab.push(n1.clone());
+            let ac = d.n_canaleta as f64 * area(d.phi_canaleta);
+            tab.push(Armadura {
+                pos: "N2".into(),
+                elemento: format!("Painel — horizontal nas canaletas grauteadas (a cada {} m)", fmt(mi.esp_canaleta)),
+                bitola_mm: d.phi_canaleta,
+                espac_cm: Some(100.0 * mi.esp_canaleta),
+                quantidade: format!("{} por canaleta", d.n_canaleta),
+                comprimento_m: mi.espac_pilar + 2.0 * lb(d.phi_canaleta, true) / 100.0,
+                as_nec: ac,
+                as_ef: ac,
+                unidade: "cm²",
+                lb_cm: lb(d.phi_canaleta, true),
+                forma: Forma::Reta,
+            });
+            let (eb, eh) = ((mi.pilar_b - 2.0 * cob).max(0.08), (mi.pilar_h - 2.0 * cob).max(0.08));
+            tab.push(Armadura {
+                pos: "N3".into(),
+                elemento: "Pilar — estribos (2 ramos)".into(),
+                bitola_mm: d.phi_estribo,
+                espac_cm: Some(d.s_estribo),
+                quantidade: format!("{} por pilar", ((h - hs) * 100.0 / d.s_estribo).ceil()),
+                comprimento_m: 2.0 * (eb + eh) + 2.0 * armadura::gancho_estribo_cm(d.phi_estribo) / 100.0,
+                as_nec: 0.0,
+                as_ef: 0.0,
+                unidade: "cm²/m",
+                lb_cm: 0.0,
+                forma: Forma::Estribo { b: eb, h: eh },
+            });
+            n1
+        });
         let mut linha = |pos: &str, elem: &str, as_nec: f64, esp: f64, principal: bool, comp: f64, boa: bool| -> Armadura {
             let (phi, s, as_ef) = if principal {
                 armadura::malha_principal(as_nec, esp)
@@ -348,12 +419,18 @@ impl MuroFlexao {
 
         // Parede
         let as_par = fp.as_adotar();
-        let n1 = linha("N1", "Parede — vertical principal (face do aterro)", as_par, tb, true, h - hs - cob, true);
+        let as_dist_par = armadura::as_distribuicao(as_par, c.fck, tb);
+        let n1 = match n1_misto {
+            Some(n1) => n1,
+            None => {
+                let n1 = linha("N1", "Parede — vertical principal (face do aterro)", as_par, tb, true, h - hs - cob, true);
+                linha("N2", "Parede — horizontal de distribuição", as_dist_par, tb, false, 0.0, true);
+                linha("N3", "Parede — vertical construtiva (face externa)", as_dist_par, tb, false, h - 2.0 * cob, true);
+                n1
+            }
+        };
         let lb1 = lb(n1.bitola_mm, true);
         let l0t = armadura::traspasse(lb1, n1.lb_cm, n1.bitola_mm);
-        let as_dist_par = armadura::as_distribuicao(as_par, c.fck, tb);
-        linha("N2", "Parede — horizontal de distribuição", as_dist_par, tb, false, 0.0, true);
-        linha("N3", "Parede — vertical construtiva (face externa)", as_dist_par, tb, false, h - 2.0 * cob, true);
         // Sapata
         let as_tal = ft.as_adotar();
         let lb_sup = lb(armadura::malha_principal(as_tal, hs).0, false);
@@ -375,10 +452,28 @@ impl MuroFlexao {
         drop(linha);
         tab.push(Armadura {
             pos: "N7".into(),
-            elemento: "Arranque — esperas da parede na sapata".into(),
+            elemento: if dm.is_some() { "Arranque — esperas do pilar na sapata".into() } else { "Arranque — esperas da parede na sapata".into() },
             comprimento_m: comp_n7,
             ..n1.clone()
         });
+        if let Some(d) = dm {
+            // arranques verticais do painel junto à sapata (furos grauteados)
+            let a1 = std::f64::consts::PI * d.phi_vertical * d.phi_vertical / 400.0;
+            let lbv = lb(d.phi_vertical, true);
+            tab.push(Armadura {
+                pos: "N8".into(),
+                elemento: format!("Painel — arranques verticais grauteados (até {} m acima da sapata)", fmt(d.y_arranque)),
+                bitola_mm: d.phi_vertical,
+                espac_cm: Some(d.s_vertical),
+                quantidade: format!("{}/m", (100.0 / d.s_vertical).ceil()),
+                comprimento_m: (hs - cob) + d.y_arranque + lbv / 100.0,
+                as_nec: a1 * 100.0 / d.s_vertical,
+                as_ef: a1 * 100.0 / d.s_vertical,
+                unidade: "cm²/m",
+                lb_cm: lbv,
+                forma: Forma::EmL { longa: (hs - cob) + d.y_arranque + lbv / 100.0, curta: lbv / 100.0 },
+            });
+        }
 
         // formas para o desenho das posições isoladas (coerentes com o esquema da seção)
         {
@@ -505,7 +600,24 @@ impl MuroFlexao {
             let x0 = bp + tb / 2.0 - self.dente_b / 2.0;
             d.retangulo(Estilo::Concreto, x0, -self.dente_h, x0 + self.dente_b, 0.0);
         }
-        d.poli(Estilo::Concreto, vec![[bp, hs], [bp + tb, hs], [bp + tt, h], [bp, h]]);
+        if self.sistema == Sistema::Misto {
+            // seção pelo painel: blocos (com juntas a cada fiada), viga de respaldo e o pilar em projeção
+            let mi = &self.misto;
+            let hvr = 0.19;
+            let painel = vec![[bp, hs], [bp + mi.bloco, hs], [bp + mi.bloco, h - hvr], [bp, h - hvr]];
+            d.poli(Estilo::Hachura, painel.clone());
+            d.linha(Estilo::Concreto, { let mut p = painel; p.push([bp, hs]); p });
+            let mut y = hs + 0.20;
+            while y < h - hvr - 0.01 {
+                d.linha(Estilo::Hachura, vec![[bp, y], [bp + mi.bloco, y]]);
+                y += 0.20;
+            }
+            d.poli(Estilo::Concreto, vec![[bp, h - hvr], [bp + mi.bloco, h - hvr], [bp + mi.bloco, h], [bp, h]]);
+            d.tracejada(Estilo::Concreto, vec![[bp + mi.bloco, hs], [bp + mi.pilar_h, hs], [bp + mi.pilar_h, h - hvr], [bp + mi.bloco, h - hvr]]);
+            d.texto([bp + mi.pilar_h + 0.05, hs + 0.5 * (h - hs)], format!("pilar {}×{} c/{} m (projeção)", fmt(100.0 * mi.pilar_b), fmt(100.0 * mi.pilar_h), fmt(mi.espac_pilar)));
+        } else {
+            d.poli(Estilo::Concreto, vec![[bp, hs], [bp + tb, hs], [bp + tt, h], [bp, h]]);
+        }
         d.tracejada(Estilo::Cota, vec![[b, 0.0], [b, hv]]);
 
         if let Some(na) = self.aterro.na() {

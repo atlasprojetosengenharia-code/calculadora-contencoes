@@ -109,6 +109,13 @@ fn texto(r: &str) -> Option<&'static str> {
         "Espessura da parede (topo)" => "Espessura da parede no topo. Marchetti: 20 cm mínimo (concretagem e cobrimento).",
         "Espessura da parede (base)" => "Espessura no engaste com a sapata, onde o momento é máximo. Marchetti: 8 a 10 % de H. \
             Define a altura útil d e, com ela, a armadura principal N1.",
+        "Sistema estrutural" => "Concreto armado: parede maciça em balanço sobre a sapata. Misto: pilares de concreto armado engastados \n            na sapata recebem o empuxo; os painéis de blocos estruturais vencem o vão entre pilares com armadura horizontal em \n            canaletas grauteadas (NBR 16868-1) e viga de respaldo no topo. A sapata e a estabilidade são as mesmas.",
+        "Bloco estrutural" => "Bloco de concreto 14 ou 19 cm. O de 19 cm dobra o braço de alavanca da armadura do painel (barra no centro da canaleta).",
+        "Resistência do bloco fbk" => "Resistência característica do bloco (NBR 6136). fk da alvenaria ≈ 0,7·0,8·fbk (confirmar com ensaio de prisma).",
+        "Espaçamento entre pilares (eixos)" => "Cada pilar recebe o empuxo da faixa entre eixos; o painel vence o vão livre entre pilares. Espaçamento \n            maior economiza pilares, mas aumenta o momento no pilar e, com o quadrado do vão, no painel.",
+        "Largura do pilar (ao longo do muro)" => "Largura da seção do pilar no sentido do muro (bw no cortante). Usual 30 a 40 cm.",
+        "Altura da seção do pilar (para o aterro)" => "Altura da seção do pilar, perpendicular ao muro (braço de alavanca). Face externa alinhada ao painel; o restante avança no aterro.",
+        "Canaletas armadas a cada" => "Espaçamento vertical das fiadas de canaletas grauteadas com armadura horizontal (múltiplo de 20 cm). Menor espaçamento = mais aço no painel.",
         "Espessura da sapata" => "Altura da laje de base. Marchetti: 8 a 10 % de H. Resiste aos momentos na ponta e no talão.",
         "Comprimento da ponta" => "Laje à frente da parede. Marchetti: 10 a 12 % de H. Aumenta o braço estabilizante e reduz a \
             tensão máxima na borda da base.",

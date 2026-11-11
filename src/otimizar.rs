@@ -84,11 +84,20 @@ pub fn custo(p: &Projeto) -> f64 {
         TipoContencao::Flexao => {
             let m = p.preparar_flexao();
             let b = m.b_ponta + m.t_base + m.b_talao;
-            let parede = 0.5 * (m.t_topo + m.t_base) * (m.h - m.h_sapata);
+            let hp = m.h - m.h_sapata;
             let sapata = b * m.h_sapata;
             let dente = if m.dente { m.dente_b * m.dente_h } else { 0.0 };
             // concreto armado ≈ 1,6 por m³ (fôrma + aço) ; escavação ≈ 0,08 por m²
-            1.6 * (parede + sapata + dente) + 0.08 * b * m.df
+            let parede = match m.sistema {
+                // misto: alvenaria estrutural ≈ 0,7 por m³ de bloco (blocos, graute, aço das
+                // canaletas) + pilares em concreto armado distribuídos no espaçamento
+                crate::tipos::misto::Sistema::Misto => {
+                    let mi = &m.misto;
+                    0.7 * mi.bloco * hp + 1.6 * mi.pilar_b * mi.pilar_h * hp / mi.espac_pilar.max(0.5)
+                }
+                _ => 1.6 * 0.5 * (m.t_topo + m.t_base) * hp,
+            };
+            parede + 1.6 * (sapata + dente) + 0.08 * b * m.df
         }
         TipoContencao::Atirantada => {
             let c = p.preparar_atirantada();
@@ -143,6 +152,25 @@ fn ajustar_estrutura(p: &mut Projeto) {
                 if tem("Parede") && m.t_base < (0.20 * h).max(0.5) {
                     m.t_base = crate::projeto::arred(m.t_base + 0.05);
                     ch = true;
+                }
+                // sistema misto: pilar mais alto; painel com canaletas mais próximas,
+                // bloco mais largo ou mais resistente
+                let mi = &mut m.misto;
+                if tem("Pilar") && mi.pilar_h < 0.80 {
+                    mi.pilar_h = crate::projeto::arred(mi.pilar_h + 0.05);
+                    ch = true;
+                }
+                if tem("Painel") {
+                    if mi.esp_canaleta > 0.21 {
+                        mi.esp_canaleta = 0.20;
+                        ch = true;
+                    } else if mi.bloco < 0.19 {
+                        mi.bloco = 0.19;
+                        ch = true;
+                    } else if let Some(f) = crate::tipos::misto::FBK.iter().find(|f| **f > mi.fbk + 1e-9) {
+                        mi.fbk = *f;
+                        ch = true;
+                    }
                 }
                 ch
             }
@@ -237,7 +265,16 @@ fn candidatos(base: &Projeto) -> Vec<(Projeto, String)> {
                                 if passivo { " + passivo frontal (reduzido, NBR 6122 7.6.3)" } else { "" },
                                 if embut > 0.0 { format!(" + embutimento {} m", fmt(emb_total)) } else { String::new() }
                             );
-                            v.push((p, d));
+                            if flexao && p.flexao.sistema == crate::tipos::misto::Sistema::Misto {
+                                // sistema misto: também o espaçamento entre pilares
+                                for s in [1.5, 2.0, 3.0, 4.0] {
+                                    let mut q = p.clone();
+                                    q.flexao.misto.espac_pilar = s;
+                                    v.push((q, format!("{d} ; pilares a cada {} m", fmt(s))));
+                                }
+                            } else {
+                                v.push((p, d));
+                            }
                         }
                     }
                 }

@@ -151,6 +151,7 @@ pub fn gerar(m: &Modelo3d, proj: &Projeto) -> String {
             Classe::Tubo => format!("IFCPIPESEGMENT({gid},$,{n},$,$,#{lp},#{pds},$,.RIGIDSEGMENT.)"),
             Classe::Filtro => format!("IFCBUILDINGELEMENTPROXY({gid},$,{n},$,'FILTRO DRENANTE',#{lp},#{pds},$,.USERDEFINED.)"),
             Classe::Canaleta => format!("IFCBUILDINGELEMENTPROXY({gid},$,{n},$,'CANALETA',#{lp},#{pds},$,.USERDEFINED.)"),
+            Classe::Pilar => format!("IFCCOLUMN({gid},$,{n},$,$,#{lp},#{pds},$,.COLUMN.)"),
             Classe::Viga => format!("IFCBEAM({gid},$,{n},$,$,#{lp},#{pds},$,.BEAM.)"),
         });
         elementos.push(el);
