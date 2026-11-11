@@ -77,7 +77,8 @@ pub fn kp_coulomb(phi: f64, delta: f64, theta: f64, beta: f64) -> f64 {
         .max(0.0)
         .sqrt();
     let den = theta.cos().powi(2) * (delta - theta).cos() * (1.0 - s).powi(2);
-    if den <= 1e-9 { 1e6 } else { num / den }
+    // s → 1 (δ e β grandes) faz o Kp de Coulomb divergir: limita ao de Rankine
+    if den <= 1e-9 || s >= 0.95 { kp_rankine(phi) } else { num / den }
 }
 
 impl ParamEmpuxo {

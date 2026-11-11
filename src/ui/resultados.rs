@@ -109,12 +109,16 @@ pub fn mostrar(ui: &mut egui::Ui, proj: &Projeto, res: &Resultado) -> Option<Str
     ui.add_space(8.0);
 
     egui::ScrollArea::vertical().id_salt("rol_resultados").show(ui, |ui| {
-        ui.columns(2, |c| {
+        ui.columns(super::widgets::n_colunas(ui), |c| {
+            let ultima = c.len() - 1;
             cartao(&mut c[0], |ui| {
                 titulo(ui, "Seção transversal");
                 desenho::pintar(ui, &res.desenho, 430.0);
             });
-            cartao(&mut c[1], |ui| {
+            if ultima == 0 {
+                c[0].add_space(10.0);
+            }
+            cartao(&mut c[ultima], |ui| {
                 titulo(ui, "Verificações");
                 lista_verificacoes(ui, res);
             });
@@ -124,10 +128,11 @@ pub fn mostrar(ui: &mut egui::Ui, proj: &Projeto, res: &Resultado) -> Option<Str
             cartao(ui, |ui| {
                 titulo(ui, "Detalhes construtivos (sem escala)");
                 let n = crate::detalhes::quantidade(proj);
-                for par in 0..n.div_ceil(2) {
-                    ui.columns(2, |c| {
+                let nc = super::widgets::n_colunas(ui);
+                for par in 0..n.div_ceil(nc) {
+                    ui.columns(nc, |c| {
                         for (j, col) in c.iter_mut().enumerate() {
-                            let i = 2 * par + j;
+                            let i = nc * par + j;
                             if i < n {
                                 desenho::pintar(col, &crate::detalhes::montar_um(proj, res, i), 300.0);
                             }
@@ -149,10 +154,11 @@ pub fn mostrar(ui: &mut egui::Ui, proj: &Projeto, res: &Resultado) -> Option<Str
             cartao(ui, |ui| {
                 titulo(ui, "Barras de aço — posições isoladas (dobras e ganchos, NBR 6118)");
                 let n = res.armaduras.len();
-                for par in 0..n.div_ceil(2) {
-                    ui.columns(2, |c| {
+                let nc = super::widgets::n_colunas(ui);
+                for par in 0..n.div_ceil(nc) {
+                    ui.columns(nc, |c| {
                         for (j, col) in c.iter_mut().enumerate() {
-                            let i = 2 * par + j;
+                            let i = nc * par + j;
                             if i < n {
                                 desenho::pintar(col, &crate::barras::montar_uma(&res.armaduras, i), 250.0);
                             }

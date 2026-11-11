@@ -170,3 +170,11 @@ pub fn croqui_gravidade(ui: &mut egui::Ui) {
     pt.line_segment([m(0.83, 0.74), m(0.89, 0.74)], Stroke::new(1.0_f32, cor));
     t(pt, m(0.93, 0.44), "H");
 }
+
+/// Largura útil abaixo da qual painéis lado a lado passam a ser empilhados.
+pub const LARGURA_ESTREITA: f32 = 920.0;
+
+/// Número de colunas que cabem: 2 em área larga, 1 (empilhado) em janela estreita.
+pub fn n_colunas(ui: &egui::Ui) -> usize {
+    if ui.available_width() < LARGURA_ESTREITA { 1 } else { 2 }
+}

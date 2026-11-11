@@ -12,7 +12,9 @@ fn texto(r: &str) -> Option<&'static str> {
         // ---------------- Geometria essencial ----------------
         "Geometria essencial" => "Dados que definem o problema: altura contida, talude de montante, sobrecarga e embutimento. \
             Alterar H (com o pré-dimensionamento ligado) recalcula as proporções iniciais da seção.",
-        "Altura do corpo H" | "Altura total H" | "Altura do talude H" | "Altura escavada H" => "Altura de solo contida. É o parâmetro \
+        "Altura livre frontal H" | "Altura livre da face H" => "Altura livre da fachada vista de frente: do terreno à frente \
+            até o topo, sem a parte enterrada. Nos muros, a estrutura tem altura total H + Df (embutimento); nas paredes embutidas, \
+            é a altura escavada (a ficha fica abaixo). É o parâmetro \
             que mais pesa: o empuxo cresce com H² (solo) e com H (sobrecarga), e os momentos com H³. Com o pré-dimensionamento \
             ligado, a geometria é preenchida pelas proporções do Marchetti (2007).",
         "Inclinação do talude de montante β" => "Inclinação do terreno acima da crista. Aumenta o coeficiente de empuxo ativo \
@@ -297,7 +299,7 @@ mod tests {
                 }
             }
         }
-        for r in ["Altura do corpo H", "Altura total H", "Altura do talude H", "Altura escavada H", "Embutimento (solo à frente) Df"] {
+        for r in ["Altura livre frontal H", "Altura livre da face H", "Embutimento (solo à frente) Df"] {
             if super::dica(r).is_none() {
                 faltando.push(r.to_string());
             }

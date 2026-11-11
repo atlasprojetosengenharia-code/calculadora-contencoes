@@ -21,7 +21,8 @@ pub fn mostrar(ui: &mut egui::Ui, f: &mut Fatores) {
     ui.add_space(6.0);
 
     egui::ScrollArea::vertical().id_salt("rol_fatores").show(ui, |ui| {
-        ui.columns(2, |c| {
+        ui.columns(super::widgets::n_colunas(ui), |c| {
+            let ultima = c.len() - 1;
             let ui = &mut c[0];
             cartao(ui, |ui| {
                 titulo(ui, "NBR 11682 — Nível de segurança (Tab. 1, 2 e 3)");
@@ -99,7 +100,10 @@ pub fn mostrar(ui: &mut egui::Ui, f: &mut Fatores) {
                 });
             });
 
-            let ui = &mut c[1];
+            let ui = &mut c[ultima];
+            if ultima == 0 {
+                ui.add_space(10.0);
+            }
             cartao(ui, |ui| {
                 titulo(ui, "NBR 5629:2018 — Tirantes");
                 tirante_tipo(ui, f);

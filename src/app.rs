@@ -44,12 +44,18 @@ pub struct App {
     msg: String,
     #[serde(skip)]
     atualiz: Option<crate::atualizacao::Verificador>,
+    /// Janela do modelo 3D aberta.
+    #[serde(skip)]
+    ver_3d: bool,
+    #[serde(skip)]
+    cam3d: ui::vista3d::Camera,
 }
 
 impl App {
     pub fn novo(cc: &eframe::CreationContext<'_>) -> Self {
         tema::aplicar(&cc.egui_ctx);
         let mut app: App = cc.storage.and_then(|s| eframe::get_value::<App>(s, eframe::APP_KEY)).unwrap_or_default();
+        app.proj.migrar();
         app.atualiz = Some(crate::atualizacao::Verificador::iniciar(cc.egui_ctx.clone()));
         app
     }
@@ -133,42 +139,54 @@ impl App {
 
     fn tela_projeto(&mut self, ctx: &egui::Context) {
         let p = tema::paleta(ctx.style().visuals.dark_mode);
+        // janela não maximizada: barra com ícones e navegação lateral compacta
+        let largura = ctx.screen_rect().width();
+        let compacto = largura < 1320.0;
+        let nav_compacta = largura < 1120.0;
+        let rot = |icone: &str, texto: &str| if compacto { icone.to_string() } else { format!("{icone} {texto}") };
 
         // Barra superior
         egui::TopBottomPanel::top("barra")
-            .frame(egui::Frame::new().fill(p.painel).inner_margin(egui::Margin::symmetric(16, 9)).stroke(Stroke::new(1.0_f32, p.borda)))
+            .frame(egui::Frame::new().fill(p.painel).inner_margin(egui::Margin::symmetric(if compacto { 8 } else { 16 }, 9)).stroke(Stroke::new(1.0_f32, p.borda)))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     widgets::logo(ui, 30.0);
-                    ui.label(RichText::new(sobre::NOME).font(tema::fonte_forte(17.0)));
-                    ui.separator();
-                    ui.label(RichText::new("Projeto").color(p.fraco));
-                    ui.add(egui::TextEdit::singleline(&mut self.proj.nome).desired_width(240.0).font(tema::fonte_forte(14.5)));
+                    if !compacto {
+                        ui.label(RichText::new(sobre::NOME).font(tema::fonte_forte(17.0)));
+                        ui.separator();
+                        ui.label(RichText::new("Projeto").color(p.fraco));
+                    }
+                    let larg_nome = if compacto { (largura - 560.0).clamp(90.0, 200.0) } else { 240.0 };
+                    ui.add(egui::TextEdit::singleline(&mut self.proj.nome).desired_width(larg_nome).font(tema::fonte_forte(14.5)))
+                        .on_hover_text("Nome do projeto");
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         egui::widgets::global_theme_preference_switch(ui);
                         if let Some(v) = &self.atualiz {
                             crate::atualizacao::aviso(ui, &v.estado());
                         }
-                        if ui.button("🏠 Início").clicked() {
+                        if ui.button(rot("🏠", "Início")).on_hover_text("Tela inicial").clicked() {
                             self.tela = Tela::Inicio;
                         }
-                        if ui.button("📚 Normas").on_hover_text("Central de normas ABNT").clicked() {
+                        if ui.button(rot("📚", "Normas")).on_hover_text("Central de normas ABNT").clicked() {
                             self.central_normas = true;
                         }
-                        if ui.button("📘 Manual").on_hover_text("Manual do usuário (PDF)").clicked() {
+                        if ui.button(rot("📘", "Manual")).on_hover_text("Manual do usuário (PDF)").clicked() {
                             self.abrir_manual();
                         }
+                        if ui.button(rot("🧊", "3D")).on_hover_text("Visualizar o modelo 3D da contenção e exportar IFC").clicked() {
+                            self.ver_3d = true;
+                        }
                         ui.separator();
-                        if ui.button("Salvar como…").clicked() {
+                        if ui.button(if compacto { "💾…" } else { "Salvar como…" }).on_hover_text("Salvar como…").clicked() {
                             self.salvar(true);
                         }
-                        if ui.button("💾 Salvar").clicked() {
+                        if ui.button(rot("💾", "Salvar")).on_hover_text("Salvar").clicked() {
                             self.salvar(false);
                         }
-                        if ui.button("📂 Abrir").clicked() {
+                        if ui.button(rot("📂", "Abrir")).on_hover_text("Abrir projeto").clicked() {
                             self.abrir();
                         }
-                        if ui.button("🗋 Novo").clicked() {
+                        if ui.button(rot("🗋", "Novo")).on_hover_text("Novo projeto").clicked() {
                             self.novo_projeto();
                         }
                     });
@@ -193,11 +211,13 @@ impl App {
 
         // Navegação lateral
         egui::SidePanel::left("nav")
-            .exact_width(236.0)
+            .exact_width(if nav_compacta { 64.0 } else { 236.0 })
             .resizable(false)
-            .frame(egui::Frame::new().fill(p.painel).inner_margin(egui::Margin::symmetric(12, 14)).stroke(Stroke::new(1.0_f32, p.borda)))
-            .show(ctx, |ui| {
-                ui.label(RichText::new("ETAPAS").small().color(p.fraco));
+            .frame(egui::Frame::new().fill(p.painel).inner_margin(egui::Margin::symmetric(if nav_compacta { 6 } else { 12 }, 14)).stroke(Stroke::new(1.0_f32, p.borda)))
+            .show(ctx, |ui| egui::ScrollArea::vertical().id_salt("rol_nav").show(ui, |ui| {
+                if !nav_compacta {
+                    ui.label(RichText::new("ETAPAS").small().color(p.fraco));
+                }
                 ui.add_space(4.0);
                 let itens = [
                     (Etapa::Sondagem, "1", "Sondagem SPT", "Camadas e parâmetros"),
@@ -206,9 +226,13 @@ impl App {
                     (Etapa::Normas, "⚙", "Normas e fatores", "Coeficientes de segurança"),
                 ];
                 for (e, n, nome, desc) in itens {
-                    if item_nav(ui, self.etapa == e, n, nome, desc) {
+                    let clicou = if nav_compacta { item_nav_compacto(ui, self.etapa == e, n, nome) } else { item_nav(ui, self.etapa == e, n, nome, desc) };
+                    if clicou {
                         self.etapa = e;
                     }
+                }
+                if nav_compacta {
+                    return;
                 }
                 ui.add_space(10.0);
                 ui.separator();
@@ -220,11 +244,11 @@ impl App {
                 ui.add_space(8.0);
                 ui.label(RichText::new("CONTENÇÃO").small().color(p.fraco));
                 ui.label(RichText::new(self.proj.tipo.nome()).font(tema::fonte_forte(14.0)).color(p.destaque));
-            });
+            }));
 
         let res = self.resultado();
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(p.fundo).inner_margin(egui::Margin::same(18)))
+            .frame(egui::Frame::new().fill(p.fundo).inner_margin(egui::Margin::same(if compacto { 10 } else { 18 })))
             .show(ctx, |ui| match self.etapa {
                 Etapa::Sondagem => {
                     let h = self.proj.altura_contida();
@@ -244,7 +268,25 @@ impl App {
                 }
                 Etapa::Normas => ui::fatores::mostrar(ui, &mut self.proj.fatores),
             });
+        if self.ver_3d {
+            if let Some(m) = ui::vista3d::janela(ctx, &mut self.ver_3d, &mut self.cam3d, &self.proj, &res) {
+                self.msg = m;
+            }
+        }
     }
+}
+
+/// Item de navegação compacto (janela estreita): só o número, com o nome na dica.
+fn item_nav_compacto(ui: &mut egui::Ui, ativo: bool, num: &str, nome: &str) -> bool {
+    let p = tema::de(ui);
+    let (r, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 46.0), egui::Sense::click());
+    if ativo {
+        ui.painter().rect_filled(r, 8.0, p.destaque_suave);
+    }
+    ui.painter().circle_filled(r.center(), 15.0, if ativo { p.destaque } else { p.borda });
+    ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, num, tema::fonte_forte(14.0), egui::Color32::WHITE);
+    ui.add_space(2.0);
+    resp.on_hover_text(nome).on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
 }
 
 fn item_nav(ui: &mut egui::Ui, ativo: bool, num: &str, nome: &str, desc: &str) -> bool {

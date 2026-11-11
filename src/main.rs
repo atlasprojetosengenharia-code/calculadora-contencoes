@@ -16,7 +16,9 @@ mod empuxo;
 mod estabilidade;
 mod fatores;
 mod global;
+mod ifc;
 mod manual;
+mod modelo3d;
 mod marca;
 mod materiais;
 mod memorial_html;
@@ -80,7 +82,7 @@ fn main() -> eframe::Result {
     let opcoes = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1440.0, 860.0])
-            .with_min_inner_size([1100.0, 680.0])
+            .with_min_inner_size([760.0, 520.0])
             .with_title(sobre::NOME)
             .with_icon(std::sync::Arc::new(icone())),
         ..Default::default()

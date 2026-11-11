@@ -7,4 +7,5 @@ pub mod normas_central;
 pub mod resultados;
 pub mod spt;
 pub mod tema;
+pub mod vista3d;
 pub mod widgets;

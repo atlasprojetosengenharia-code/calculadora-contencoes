@@ -58,10 +58,8 @@ impl TipoContencao {
     }
     pub fn rotulo_altura(&self) -> &'static str {
         match self {
-            TipoContencao::Gravidade => "Altura do corpo H",
-            TipoContencao::Flexao => "Altura total H",
-            TipoContencao::Grampeado => "Altura do talude H",
-            _ => "Altura escavada H",
+            TipoContencao::Grampeado => "Altura livre da face H",
+            _ => "Altura livre frontal H",
         }
     }
     /// Regra de pré-dimensionamento da geometria a partir de H, se houver.
@@ -105,7 +103,12 @@ impl TipoContencao {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Geometria {
+    /// Altura livre frontal (fachada visível, do terreno à frente até o topo), m.
     pub h: f64,
+    /// `true` quando `h` é a altura livre frontal (projetos a partir da 0.3.4).
+    /// Projetos antigos (sem o campo) guardavam a altura estrutural dos muros.
+    #[serde(default)]
+    pub h_livre: bool,
     /// Inclinação do talude de montante (crista), graus.
     pub beta: f64,
     /// Sobrecarga na crista (kPa).
@@ -115,7 +118,7 @@ pub struct Geometria {
 
 impl Default for Geometria {
     fn default() -> Self {
-        Self { h: 4.0, beta: 0.0, q: 20.0, engaste: 0.6 }
+        Self { h: 4.0, h_livre: true, beta: 0.0, q: 20.0, engaste: 0.6 }
     }
 }
 
@@ -206,12 +209,18 @@ impl Projeto {
                 // base 40–70 % Ht (k) ; topo 30 cm ou 8–15 % Ht → máx(0,30; 10 %) ;
                 // altura da base 12–15 % Ht → 13 % ; paramento frontal 1:10 a 1:15 → 1:12 ;
                 // ponta 0,5d a d → 0,5·F ; embutimento: ver embutimento_minimo
+                // H = altura livre frontal: Ht = H + Df (Df depende de F, que depende de Ht)
                 let m = &mut self.gravidade;
-                m.f = arred(0.13 * h / 0.87);
-                let ht = h + m.f;
+                let mut df = embutimento_minimo(1.15 * h, 0.15 * h);
+                for _ in 0..30 {
+                    m.f = arred(0.13 * (h + df));
+                    df = embutimento_minimo(h + df, m.f);
+                }
+                let ht = h + df;
+                m.f = arred(0.13 * ht);
                 let base = arred(k * ht);
                 m.crista = arred((0.10 * ht).max(0.30));
-                m.proj_frente = arred(h / 12.0);
+                m.proj_frente = arred((ht - m.f) / 12.0);
                 m.ressalto_frente = arred(0.5 * m.f);
                 m.ressalto_tras = arred((0.02 * ht).max(0.10));
                 let resto = base - m.ressalto_frente - m.proj_frente - m.crista - m.ressalto_tras;
@@ -222,7 +231,13 @@ impl Projeto {
                 // Marchetti, 2.2 (Fig. 41): topo 20 cm mín. ; parede na base 8–10 % H ;
                 // sapata 8–10 % H ; ponta 10–12 % H ; base 40–70 % H (k) ;
                 // 30 cm mínimos de solo sobre a ponta (embutimento_minimo)
+                // H = altura livre frontal: altura total = H + Df
                 let m = &mut self.flexao;
+                let mut df = 0.40_f64.max(0.10 * h);
+                for _ in 0..30 {
+                    df = embutimento_minimo(h + df, arred((0.09 * (h + df)).max(0.25)));
+                }
+                let h = h + df;
                 m.t_topo = 0.20;
                 m.t_base = arred((0.09 * h).max(0.20));
                 m.h_sapata = arred((0.09 * h).max(0.25));
@@ -342,13 +357,30 @@ impl Projeto {
 
     pub fn abrir(caminho: &std::path::Path) -> Result<Self, String> {
         let txt = std::fs::read_to_string(caminho).map_err(|e| e.to_string())?;
-        serde_json::from_str(&txt).map_err(|e| format!("Arquivo inválido: {e}"))
+        let mut p: Self = serde_json::from_str(&txt).map_err(|e| format!("Arquivo inválido: {e}"))?;
+        p.migrar();
+        Ok(p)
     }
 
-    /// Altura total de solo contido pela estrutura (para drenagem / NA).
+    /// Converte projetos antigos, que guardavam a altura estrutural dos muros,
+    /// para a altura livre frontal.
+    pub fn migrar(&mut self) {
+        if !self.geometria.h_livre {
+            let df = self.geometria.engaste.max(0.0);
+            match self.tipo {
+                TipoContencao::Gravidade => self.geometria.h = (self.geometria.h + self.gravidade.f - df).max(0.5),
+                TipoContencao::Flexao => self.geometria.h = (self.geometria.h - df).max(0.5),
+                _ => {}
+            }
+            self.geometria.h_livre = true;
+        }
+    }
+
+    /// Altura total de solo contido pela estrutura (para drenagem / NA):
+    /// nos muros, da base da fundação ao topo (altura livre + embutimento).
     pub fn altura_contida(&self) -> f64 {
         match self.tipo {
-            TipoContencao::Gravidade => self.geometria.h + self.gravidade.f,
+            TipoContencao::Gravidade | TipoContencao::Flexao => self.geometria.h + self.geometria.engaste.max(0.0),
             _ => self.geometria.h,
         }
     }
@@ -376,10 +408,7 @@ impl Projeto {
 
     /// Cota de assentamento da base (profundidade na sondagem, m).
     pub fn z_base(&self) -> f64 {
-        match self.tipo {
-            TipoContencao::Gravidade => self.geometria.h + self.gravidade.f,
-            _ => self.geometria.h,
-        }
+        self.altura_contida()
     }
 
     /// Seção do memorial com o SPT do solo de apoio e do tardoz.
@@ -468,7 +497,8 @@ impl Projeto {
 
     pub fn preparar_gravidade(&self) -> MuroGravidade {
         let mut m = self.gravidade.clone();
-        m.h = self.geometria.h;
+        // corpo acima da base = altura livre + embutimento − altura da base
+        m.h = (self.geometria.h + self.geometria.engaste.max(0.0) - m.f).max(0.3);
         m.df = self.geometria.engaste;
         m.aterro = self.perfil_calc();
         m.reaterro = self.reaterro.usar;
@@ -481,7 +511,8 @@ impl Projeto {
     pub fn preparar_flexao(&self) -> MuroFlexao {
         let mut m = self.flexao.clone();
         m.concreto.peso = crate::materiais::CONCRETO_ARMADO;
-        m.h = self.geometria.h;
+        // altura total (sapata incluída) = altura livre + embutimento
+        m.h = self.geometria.h + self.geometria.engaste.max(0.0);
         m.df = self.geometria.engaste;
         m.aterro = self.perfil_calc();
         m.reaterro = self.reaterro.usar;
@@ -585,6 +616,15 @@ impl Projeto {
             t(format!("Local: {}", if self.local.is_empty() { "—" } else { &self.local })),
             t(format!("Responsável técnico: {}", if self.responsavel.is_empty() { "—" } else { &self.responsavel })),
             t(format!("Tipo de contenção: {}", self.tipo.nome())),
+            t(match self.tipo {
+                TipoContencao::Gravidade | TipoContencao::Flexao => format!(
+                    "Altura livre frontal (fachada visível) H = {} m ; embutimento Df = {} m ; altura total da estrutura = {} m",
+                    fmt(self.geometria.h),
+                    fmt(self.geometria.engaste.max(0.0)),
+                    fmt(self.altura_contida())
+                ),
+                _ => format!("Altura livre frontal (fachada visível) H = {} m", fmt(self.geometria.h)),
+            }),
             Bloco::Titulo(match self.sondagem.modo {
                 crate::spt::ModoSolo::Completo => format!("Sondagem {} (SPT)", self.sondagem.identificacao),
                 crate::spt::ModoSolo::Simplificado => "Solo — entrada simplificada na base (SPT)".into(),
@@ -793,13 +833,14 @@ mod testes_predim {
 
     #[test]
     fn gravidade_proporcoes_do_marchetti() {
-        // Exemplo 4.1 do livro: corpo 5,80 m + base 0,90 m (Ht = 6,70 m)
+        // Exemplo 4.1 do livro: corpo 5,80 m + base 0,90 m (Ht = 6,70 m), Df = 1,20 m → altura livre 5,50 m
         let mut p = Projeto::default();
         p.tipo = TipoContencao::Gravidade;
-        p.geometria.h = 5.8;
+        p.geometria.h = 5.5;
         assert!(p.pre_dimensionar().is_some());
         let g = &p.gravidade;
-        let ht = p.geometria.h + g.f;
+        let ht = p.geometria.h + p.geometria.engaste;
+        assert!((ht - 6.70).abs() < 1e-9, "Ht = {ht}");
         assert!((g.f - 0.90).abs() < 1e-9, "F = {}", g.f);
         assert!((g.proj_frente - 0.50).abs() < 1e-9, "paramento 1:12 ≈ 0,48 → {}", g.proj_frente);
         assert!((g.ressalto_frente - 0.45).abs() < 1e-9 && (g.ressalto_tras - 0.15).abs() < 1e-9);
@@ -809,17 +850,34 @@ mod testes_predim {
     }
 
     #[test]
+    fn migra_altura_de_projeto_antigo() {
+        let mut p = Projeto::default();
+        p.tipo = TipoContencao::Gravidade;
+        p.geometria.h = 5.8; // corpo, no formato antigo
+        p.gravidade.f = 0.9;
+        p.geometria.engaste = 1.2;
+        p.geometria.h_livre = false;
+        p.migrar();
+        assert!((p.geometria.h - 5.5).abs() < 1e-9);
+        assert!((p.preparar_gravidade().h - 5.8).abs() < 1e-9, "estrutura inalterada");
+        let json = serde_json::to_string(&p).unwrap().replace("\"h_livre\":true,", "");
+        let q: Projeto = serde_json::from_str(&json).unwrap();
+        assert!(!q.geometria.h_livre, "arquivo sem o campo é do formato antigo");
+    }
+
+    #[test]
     fn flexao_proporcoes_do_marchetti() {
         let mut p = Projeto::default();
         p.tipo = TipoContencao::Flexao;
         p.geometria.h = 5.5;
         p.pre_dimensionar();
         let m = &p.flexao;
+        let ht = p.geometria.h + p.geometria.engaste;
         let b = m.b_ponta + m.t_base + m.b_talao;
         assert!((m.t_topo - 0.20).abs() < 1e-9);
-        assert!(m.t_base >= 0.08 * 5.5 && m.t_base <= 0.10 * 5.5 + 0.05);
-        assert!(m.b_ponta >= 0.10 * 5.5 && m.b_ponta <= 0.12 * 5.5 + 0.05);
-        assert!(b >= 0.40 * 5.5 - 1e-9 && b <= 0.70 * 5.5 + 0.10, "B = {b}");
+        assert!(m.t_base >= 0.08 * ht && m.t_base <= 0.10 * ht + 0.05);
+        assert!(m.b_ponta >= 0.10 * ht && m.b_ponta <= 0.12 * ht + 0.05);
+        assert!(b >= 0.40 * ht - 1e-9 && b <= 0.70 * ht + 0.10, "B = {b}");
     }
 
     #[test]
@@ -1174,5 +1232,56 @@ mod testes_predim {
                 eprintln!("{} H = {h} m: {}", tipo.nome(), if falhas.is_empty() { "ATENDE".into() } else { falhas.join(" | ") });
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod testes_varredura {
+    use super::*;
+    use crate::drenagem::Condicao;
+
+    /// Varredura de robustez: todo tipo, várias alturas, talude, sobrecarga,
+    /// água e sismo. Nenhuma verificação pode sair NaN, nenhum FS negativo,
+    /// e as dimensões da estrutura têm de ser coerentes com a altura livre.
+    #[test]
+    fn sem_nan_nem_valores_incoerentes() {
+        let mut casos = 0;
+        for tipo in TIPOS_CONTENCAO {
+            for h in [1.0, 2.5, 6.0, 10.0] {
+                for (beta, q, na, kh) in [(0.0, 0.0, false, 0.0), (15.0, 30.0, true, 0.0), (0.0, 20.0, false, 0.15)] {
+                    let mut p = Projeto::default();
+                    p.tipo = tipo;
+                    p.geometria.h = h;
+                    p.geometria.beta = beta;
+                    p.geometria.q = q;
+                    p.cargas.kh = kh;
+                    p.sondagem.usar_na = na;
+                    p.sondagem.prof_na = 0.5 * h;
+                    if na {
+                        p.drenagem.condicao = Condicao::Parcial;
+                    }
+                    p.pre_dimensionar();
+                    let r = p.calcular();
+                    casos += 1;
+                    let id = format!("{} H={h} β={beta} q={q} NA={na} kh={kh}", tipo.nome());
+                    for v in &r.verificacoes {
+                        assert!(!v.valor.is_nan() && !v.limite.is_nan(), "{id}: NaN em {}", v.nome);
+                        if v.nome.starts_with("FS") {
+                            assert!(v.valor >= 0.0, "{id}: {} = {}", v.nome, v.valor);
+                        }
+                    }
+                    if matches!(tipo, TipoContencao::Gravidade | TipoContencao::Flexao) {
+                        let ht = p.altura_contida();
+                        assert!((ht - h - p.geometria.engaste).abs() < 1e-9, "{id}");
+                        assert!(p.geometria.engaste >= 0.40 - 1e-9, "{id}: Df");
+                    }
+                    if tipo == TipoContencao::Gravidade {
+                        let g = p.preparar_gravidade();
+                        assert!((g.h + g.f - h - p.geometria.engaste).abs() < 1e-9, "{id}: corpo + base = H + Df");
+                    }
+                }
+            }
+        }
+        assert_eq!(casos, 6 * 4 * 3);
     }
 }

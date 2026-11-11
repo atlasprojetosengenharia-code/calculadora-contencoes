@@ -39,7 +39,7 @@ pub fn mostrar(ui: &mut egui::Ui, proj: &mut Projeto, res: &Resultado) -> bool {
                 .corner_radius(10.0)
                 .inner_margin(egui::Margin::symmetric(12, 8))
                 .show(ui, |ui| {
-                    ui.set_width(178.0);
+                    ui.set_width(if ui.ctx().screen_rect().width() < 1250.0 { 150.0 } else { 178.0 });
                     ui.set_height(44.0);
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 2.0;
@@ -56,6 +56,35 @@ pub fn mostrar(ui: &mut egui::Ui, proj: &mut Projeto, res: &Resultado) -> bool {
         }
     });
     ui.add_space(8.0);
+
+    // janela estreita: entradas e pré-visualização empilhadas, numa só rolagem
+    if ui.available_width() < 820.0 {
+        egui::ScrollArea::vertical().id_salt("rol_contencao_estreita").show(ui, |ui| {
+            if entradas(ui, proj, res) {
+                if let Some(m) = proj.pre_dimensionar() {
+                    ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(("predim_msg", proj.tipo.arquivo())), m));
+                }
+            }
+            ui.add_space(10.0);
+            cartao(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    titulo(ui, "Pré-visualização");
+                    if res.atende() {
+                        chip(ui, "ATENDE", p.ok);
+                    } else {
+                        chip(ui, "NÃO ATENDE", p.falha);
+                    }
+                    if ui.button("Ver resultados completos ➡").clicked() {
+                        ver_resultados = true;
+                    }
+                });
+                desenho::pintar(ui, &res.desenho, 320.0);
+                ui.add_space(6.0);
+                lista_verificacoes(ui, res);
+            });
+        });
+        return ver_resultados;
+    }
 
     let largura_entradas = 410.0f32.min(ui.available_width() * 0.42);
     ui.horizontal_top(|ui| {
@@ -207,7 +236,7 @@ fn entradas(ui: &mut egui::Ui, proj: &mut Projeto, res: &Resultado) -> bool {
     cartao(ui, |ui| {
         titulo(ui, &format!("Parâmetros — {}", tipo.nome()));
         match tipo {
-            TipoContencao::Gravidade => det_gravidade(ui, gravidade, geometria.h),
+            TipoContencao::Gravidade => det_gravidade(ui, gravidade, geometria.h + geometria.engaste.max(0.0) - gravidade.f),
             TipoContencao::Flexao => det_flexao(ui, flexao),
             TipoContencao::Atirantada => det_atirantada(ui, atirantada, fatores, geometria.h, empuxo),
             TipoContencao::Prancha => det_prancha(ui, prancha, empuxo),
@@ -220,10 +249,7 @@ fn entradas(ui: &mut egui::Ui, proj: &mut Projeto, res: &Resultado) -> bool {
     if matches!(tipo, TipoContencao::Gravidade | TipoContencao::Flexao) {
         cartao(ui, |ui| {
             titulo(ui, "Reaterro do tardoz e solo de apoio");
-            let z_base = match tipo {
-                TipoContencao::Gravidade => geometria.h + gravidade.f,
-                _ => geometria.h,
-            };
+            let z_base = geometria.h + geometria.engaste.max(0.0);
             ui_reaterro(ui, reaterro, sondagem, z_base);
         });
         ui.add_space(10.0);

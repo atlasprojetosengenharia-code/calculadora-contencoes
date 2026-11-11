@@ -174,7 +174,8 @@ fn correlacoes(ui: &mut egui::Ui, s: &mut Sondagem) -> bool {
 fn simplificado(ui: &mut egui::Ui, s: &mut Sondagem) -> bool {
     let mut mudou = false;
     let p = tema::de(ui);
-    ui.columns(2, |c| {
+    ui.columns(super::widgets::n_colunas(ui), |c| {
+        let ultima = c.len() - 1;
         cartao(&mut c[0], |ui| {
             titulo(ui, "Entrada simplificada na base");
             nota(ui, "Informe o NSPT representativo e o tipo de solo predominante na fundação; γ, φ' e c' são estimados por correlação.");
@@ -196,7 +197,7 @@ fn simplificado(ui: &mut egui::Ui, s: &mut Sondagem) -> bool {
             mudou |= correlacoes(ui, s);
             nota(ui, "Solo homogêneo: o mesmo solo é usado no maciço contido e na fundação. Para perfis estratificados, use o SPT completo.");
         });
-        cartao(&mut c[1], |ui| {
+        cartao(&mut c[ultima], |ui| {
             titulo(ui, "Parâmetros estimados");
             let cam = s.camada_simplificada();
             let estado = compacidade(s.simples_tipo, s.simples_nspt);

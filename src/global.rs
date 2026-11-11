@@ -513,6 +513,12 @@ impl Projeto {
         m
     }
 
+    /// Seção do cálculo de estabilidade global (geometria da contenção, terreno e reforços).
+    pub fn secao_global(&self, r: &Resultado) -> Modelo {
+        let ficha = r.verificacoes.iter().find(|v| v.nome.starts_with("Ficha de projeto")).map(|v| v.valor);
+        self.modelo_global(&r.reforcos, ficha)
+    }
+
     /// Verifica a estabilidade global e a registra no memorial, no desenho e nas verificações.
     pub fn estabilidade_global(&self, r: &mut Resultado) {
         let f: &Fatores = &self.fatores;

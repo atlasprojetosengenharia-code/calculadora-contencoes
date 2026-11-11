@@ -98,7 +98,7 @@ fn conteudo() -> Vec<B> {
         Cap("4. Contenção e geometria"),
         Sec("Geometria essencial"),
         N(1, "Escolha o tipo de contenção no seletor do topo."),
-        N(2, "Informe a altura contida H e a inclinação do talude de montante β."),
+        N(2, "Informe a altura livre frontal H (fachada visível, sem a parte enterrada) e a inclinação do talude de montante β. O botão 🧊 3D mostra o modelo e exporta IFC."),
         N(3, "Informe a sobrecarga na crista q. A NBR 11682 (7.3.3) exige no mínimo 20 kPa; abaixo disso o programa \
               mostra um alerta."),
         N(4, "Informe a profundidade de engastamento (muros) ou acompanhe a ficha calculada (contenções embutidas)."),

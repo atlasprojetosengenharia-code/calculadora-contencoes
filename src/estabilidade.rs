@@ -196,7 +196,12 @@ pub fn analisar(
     let tan_db = fund.coef_atrito();
     let ca = fund.c * fund.frac_adesao;
     let tangente = fund.criterio_atrito == crate::solo::CriterioAtrito::TangenteReduzida;
-    let r = n.max(0.0) * tan_db + ca * b + r_pas;
+    // adesão só no trecho comprimido da base (sem contato na zona tracionada)
+    let b_comp = {
+        let xr = if n > 0.0 { m_liq / n } else { 0.0 };
+        DistribuicaoBase { b, n, x_r: xr, e: b / 2.0 - xr }.comprimento_comprimido()
+    };
+    let r = n.max(0.0) * tan_db + ca * b_comp + r_pas;
     let fs_d = if t > 0.0 { r / t } else { f64::INFINITY };
     res.linha(format!(
         "N = {} kN/m ; tan δb = {} ; adesão = {} kPa ; passivo = {} kN/m ; R = {} kN/m ; T = {} kN/m",
@@ -209,13 +214,13 @@ pub fn analisar(
     res.formula(
         format!("Deslizamento na base ({caso})"),
         if tangente {
-            "FS = (N·f + c'·B + Ep) / ΣH ;  f = k·tg φ ;  c' = k·c"
+            "FS = (N·f + c'·B' + Ep) / ΣH ;  f = k·tg φ ;  c' = k·c ;  B' = trecho comprimido"
         } else {
-            "FS = (N·tan δb + ca·B + Ep) / ΣH ;  δb = k·φ ;  ca = k·c"
+            "FS = (N·tan δb + ca·B' + Ep) / ΣH ;  δb = k·φ ;  ca = k·c ;  B' = trecho comprimido"
         },
         format!(
             "FS = ({}·{} + {}·{} + {}) / {}",
-            fmt(n.max(0.0)), fmt(tan_db), fmt(ca), fmt(b), fmt(r_pas), fmt(t)
+            fmt(n.max(0.0)), fmt(tan_db), fmt(ca), fmt(b_comp), fmt(r_pas), fmt(t)
         ),
         format!("R = {} kN/m ;  FS = {}", fmt(r), fmt(fs_d)),
     );
