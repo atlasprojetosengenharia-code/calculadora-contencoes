@@ -6,7 +6,7 @@ use super::tema;
 use crate::modelo3d::{Classe, Material, Modelo3d, Tri};
 use crate::projeto::Projeto;
 use crate::resultado::{fmt, Resultado};
-use eframe::egui::{self, Color32, Pos2, RichText, Sense, Shape, Stroke};
+use eframe::egui::{self, Color32, RichText, Sense, Stroke};
 
 /// Estado da câmera e opções da janela (não é salvo no projeto).
 #[derive(Clone, Debug)]
@@ -24,41 +24,26 @@ pub struct Camera {
 
 impl Default for Camera {
     fn default() -> Self {
-        Self { azimute: -0.75, elevacao: 0.45, zoom: 1.0, comprimento: 10.0, terreno: true, reforcos: true, drenagem: true, corte: false }
+        Self { azimute: 0.85, elevacao: 0.40, zoom: 1.0, comprimento: 10.0, terreno: true, reforcos: true, drenagem: true, corte: false }
     }
 }
 
-/// Triângulo pronto para desenhar: vértices no mundo, cor base e normal.
+/// Triângulo pronto para desenhar: vértices no mundo, cor já iluminada e peça.
 struct TriCena {
     v: Tri,
-    cor: [f32; 3],
-    /// Intensidade difusa da luz (fixa no mundo), já calculada.
-    luz: f32,
+    cor: [u8; 3],
+    peca: u32,
     classe: Classe,
 }
 
-/// Cena montada uma vez por projeto/opções (o desenho de cada quadro só projeta e ordena).
+/// Cena montada uma vez por projeto/opções; a imagem é rasterizada com
+/// z-buffer (sem sobreposições) só quando a câmera ou a janela mudam.
 pub struct Cena {
     chave: u64,
     tris: Vec<TriCena>,
     centro: [f64; 3],
     raio: f32,
     pub modelo: Modelo3d,
-}
-
-/// Divide triângulos maiores que `s` (ordem do pintor estável). Feito só na montagem.
-fn subdividir(t: Tri, s: f64, prof: u32, saida: &mut Vec<Tri>) {
-    let d = |a: [f64; 3], b: [f64; 3]| ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt();
-    let l = [d(t[0], t[1]), d(t[1], t[2]), d(t[2], t[0])];
-    let (i, lm) = l.iter().enumerate().fold((0, 0.0), |acc, (k, &v)| if v > acc.1 { (k, v) } else { acc });
-    if lm <= s || prof == 0 {
-        saida.push(t);
-        return;
-    }
-    let (a, b, c) = (t[i], t[(i + 1) % 3], t[(i + 2) % 3]);
-    let m = [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0, (a[2] + b[2]) / 2.0];
-    subdividir([a, m, c], s, prof - 1, saida);
-    subdividir([m, b, c], s, prof - 1, saida);
 }
 
 /// Cor de cada material (tom médio do material real); a bolsa de brita mostra a
@@ -76,22 +61,15 @@ impl Cena {
         let (a, b) = modelo.caixa();
         let centro = [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0, (a[2] + b[2]) / 2.0];
         let raio = (((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2) + (b[2] - a[2]).powi(2)).sqrt() / 2.0).max(0.5);
-        // luz fixa no mundo (de cima, à esquerda e da frente)
+        // luz fixa no mundo (de cima, à esquerda e da frente) + ambiente
         let luz = {
             let l = [-0.45f64, 0.80, -0.40];
             let n = (l[0] * l[0] + l[1] * l[1] + l[2] * l[2]).sqrt();
             [l[0] / n, l[1] / n, l[2] / n]
         };
-        // só os blocos grandes (solo, muro) são subdivididos, e com passo largo
-        let passo = (raio / 7.0).clamp(0.4, 2.5);
         let mut tris = Vec::new();
-        for pc in &modelo.pecas {
-            let grandes = matches!(pc.classe, Classe::Terreno | Classe::Muro | Classe::Sapata | Classe::Viga);
-            let mut ts = Vec::new();
-            for t in pc.forma.triangulos(8) {
-                if grandes { subdividir(t, passo, 8, &mut ts) } else { ts.push(t) }
-            }
-            for t in ts {
+        for (ip, pc) in modelo.pecas.iter().enumerate() {
+            for t in pc.forma.triangulos(14) {
                 let u = [t[1][0] - t[0][0], t[1][1] - t[0][1], t[1][2] - t[0][2]];
                 let w = [t[2][0] - t[0][0], t[2][1] - t[0][1], t[2][2] - t[0][2]];
                 let n = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]];
@@ -100,29 +78,27 @@ impl Cena {
                     continue;
                 }
                 let n = [n[0] / nl, n[1] / nl, n[2] / nl];
-                let difusa = (n[0] * luz[0] + n[1] * luz[1] + n[2] * luz[2]).abs() as f32;
-                tris.push(TriCena { v: t, cor: cor_de(pc.material, n), luz: 0.45 + 0.60 * difusa, classe: pc.classe });
+                let k = 0.42 + 0.62 * (n[0] * luz[0] + n[1] * luz[1] + n[2] * luz[2]).abs() as f32;
+                let c = cor_de(pc.material, n);
+                let q = |x: f32| (x * k * 255.0).clamp(0.0, 255.0) as u8;
+                tris.push(TriCena { v: t, cor: [q(c[0]), q(c[1]), q(c[2])], peca: ip as u32 + 1, classe: pc.classe });
             }
         }
         Cena { chave, tris, centro, raio: raio as f32, modelo }
     }
 
-    /// Projeta, ordena (pintor) e desenha numa única malha.
-    fn desenhar(&self, painter: &egui::Painter, rect: egui::Rect, cam: &Camera) {
+    /// Rasteriza a cena (z-buffer, contornos nas arestas das peças) numa imagem `w × h`.
+    fn rasterizar(&self, w: usize, h: usize, cam: &Camera, fundo: Color32, escala: f32) -> egui::ColorImage {
         let (sa, ca) = cam.azimute.sin_cos();
         let (se, ce) = cam.elevacao.sin_cos();
         let raio = self.raio;
         let dist = 3.2 * raio;
-        let foco = 0.5 * rect.width().min(rect.height()) * 2.6 * cam.zoom;
+        let foco = 0.5 * (w.min(h) as f32) * 3.4 * cam.zoom;
+        let (cx, cy) = (w as f32 / 2.0, h as f32 / 2.0);
         let c0 = self.centro;
-        let cam_pt = |v: [f64; 3]| -> [f32; 3] {
-            let (x, y, z) = ((v[0] - c0[0]) as f32, (v[1] - c0[1]) as f32, (v[2] - c0[2]) as f32);
-            let x1 = ca * x + sa * z;
-            let z1 = -sa * x + ca * z;
-            [x1, ce * y - se * z1, se * y + ce * z1]
-        };
-        let centro_tela = rect.center();
-        let mut prims: Vec<(f32, [Pos2; 3], Color32)> = Vec::with_capacity(self.tris.len());
+        let mut cor = vec![fundo; w * h];
+        let mut prof = vec![0.0f32; w * h]; // 1/d (maior = mais perto)
+        let mut id = vec![0u32; w * h];
         for t in &self.tris {
             if (t.classe == Classe::Terreno && !cam.terreno)
                 || (matches!(t.classe, Classe::Tirante | Classe::Grampo | Classe::Placa | Classe::Cabeca) && !cam.reforcos)
@@ -130,30 +106,129 @@ impl Cena {
             {
                 continue;
             }
-            let c = [cam_pt(t.v[0]), cam_pt(t.v[1]), cam_pt(t.v[2])];
-            if c.iter().any(|q| dist - q[2] <= 0.05 * raio) {
+            // vértices na tela (x, y) e 1/d
+            let mut p = [[0.0f32; 3]; 3];
+            let mut atras = false;
+            for k in 0..3 {
+                let v = t.v[k];
+                let (x, y, z) = ((v[0] - c0[0]) as f32, (v[1] - c0[1]) as f32, (v[2] - c0[2]) as f32);
+                let x1 = ca * x + sa * z;
+                let z1 = -sa * x + ca * z;
+                let (y2, z2) = (ce * y - se * z1, se * y + ce * z1);
+                let d = dist - z2;
+                if d <= 0.05 * raio {
+                    atras = true;
+                    break;
+                }
+                p[k] = [cx + foco * x1 / d, cy - foco * y2 / d, 1.0 / d];
+            }
+            if atras {
                 continue;
             }
-            let p = |q: [f32; 3]| {
-                let d = dist - q[2];
-                centro_tela + egui::vec2(foco * q[0] / d, -foco * q[1] / d)
-            };
-            let k = t.luz;
-            let q = |x: f32| (x * k * 255.0).clamp(0.0, 255.0) as u8;
-            prims.push(((c[0][2] + c[1][2] + c[2][2]) / 3.0, [p(c[0]), p(c[1]), p(c[2])], Color32::from_rgb(q(t.cor[0]), q(t.cor[1]), q(t.cor[2]))));
-        }
-        prims.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
-        let mut malha = egui::Mesh::default();
-        malha.reserve_triangles(prims.len());
-        malha.reserve_vertices(prims.len() * 3);
-        for (_, pts, cor) in prims {
-            let i = malha.vertices.len() as u32;
-            for q in pts {
-                malha.colored_vertex(q, cor);
+            // o solo recua um pouco: peças encostadas nele não "brigam" pelo pixel
+            let vies = if t.classe == Classe::Terreno { 0.9995 } else { 1.0 };
+            let area = (p[1][0] - p[0][0]) * (p[2][1] - p[0][1]) - (p[1][1] - p[0][1]) * (p[2][0] - p[0][0]);
+            if area.abs() < 1e-6 {
+                continue;
             }
-            malha.add_triangle(i, i + 1, i + 2);
+            let x0 = p.iter().map(|q| q[0]).fold(f32::INFINITY, f32::min).floor().max(0.0) as usize;
+            let x1 = (p.iter().map(|q| q[0]).fold(f32::NEG_INFINITY, f32::max).ceil() as isize).min(w as isize - 1);
+            let y0 = p.iter().map(|q| q[1]).fold(f32::INFINITY, f32::min).floor().max(0.0) as usize;
+            let y1 = (p.iter().map(|q| q[1]).fold(f32::NEG_INFINITY, f32::max).ceil() as isize).min(h as isize - 1);
+            if x1 < 0 || y1 < 0 {
+                continue;
+            }
+            let c = Color32::from_rgb(t.cor[0], t.cor[1], t.cor[2]);
+            let inv = 1.0 / area;
+            for yy in y0..=y1 as usize {
+                let py = yy as f32 + 0.5;
+                for xx in x0..=x1 as usize {
+                    let px = xx as f32 + 0.5;
+                    let w0 = ((p[1][0] - px) * (p[2][1] - py) - (p[1][1] - py) * (p[2][0] - px)) * inv;
+                    let w1 = ((p[2][0] - px) * (p[0][1] - py) - (p[2][1] - py) * (p[0][0] - px)) * inv;
+                    let w2 = 1.0 - w0 - w1;
+                    if w0 < -1e-5 || w1 < -1e-5 || w2 < -1e-5 {
+                        continue;
+                    }
+                    let z = (w0 * p[0][2] + w1 * p[1][2] + w2 * p[2][2]) * vies;
+                    let i = yy * w + xx;
+                    if z > prof[i] {
+                        prof[i] = z;
+                        cor[i] = c;
+                        id[i] = t.peca;
+                    }
+                }
+            }
         }
-        painter.add(Shape::mesh(malha));
+        // contornos: troca de peça ou salto de profundidade entre vizinhos
+        let linha = (escala.round() as usize).max(1);
+        let mut saida = cor.clone();
+        for yy in 0..h {
+            for xx in 0..w {
+                let i = yy * w + xx;
+                if id[i] == 0 {
+                    continue;
+                }
+                let mut borda = false;
+                for (dx, dy) in [(linha as isize, 0isize), (0, linha as isize), (-(linha as isize), 0), (0, -(linha as isize))] {
+                    let (nx, ny) = (xx as isize + dx, yy as isize + dy);
+                    if nx < 0 || ny < 0 || nx >= w as isize || ny >= h as isize {
+                        continue;
+                    }
+                    let j = ny as usize * w + nx as usize;
+                    // só desenha o contorno no pixel mais próximo da câmera
+                    if id[j] != id[i] && prof[i] >= prof[j] {
+                        borda = true;
+                        break;
+                    }
+                    if id[j] == id[i] && (prof[i] - prof[j]).abs() > 0.02 * prof[i] {
+                        borda = true;
+                        break;
+                    }
+                }
+                if borda {
+                    let c = cor[i];
+                    saida[i] = Color32::from_rgb((c.r() as f32 * 0.45) as u8, (c.g() as f32 * 0.45) as u8, (c.b() as f32 * 0.45) as u8);
+                }
+            }
+        }
+        egui::ColorImage { size: [w, h], pixels: saida }
+    }
+
+    /// Desenha a cena em `rect`: re-rasteriza só se a câmera, as opções ou o tamanho mudaram.
+    fn desenhar(&self, ui: &egui::Ui, painter: &egui::Painter, rect: egui::Rect, cam: &Camera, fundo: Color32) {
+        use std::hash::{Hash, Hasher};
+        let ppp = ui.ctx().pixels_per_point();
+        // resolução limitada (~1,6 Mpx) para manter o programa leve
+        let mut esc = ppp;
+        let px = (rect.width() * esc) * (rect.height() * esc);
+        if px > 1.6e6 {
+            esc *= (1.6e6 / px).sqrt();
+        }
+        let (w, h) = (((rect.width() * esc) as usize).max(16), ((rect.height() * esc) as usize).max(16));
+        let mut hs = std::collections::hash_map::DefaultHasher::new();
+        self.chave.hash(&mut hs);
+        (w, h, cam.azimute.to_bits(), cam.elevacao.to_bits(), cam.zoom.to_bits(), cam.terreno, cam.reforcos, cam.drenagem).hash(&mut hs);
+        fundo.to_array().hash(&mut hs);
+        let chave = hs.finish();
+        let id = egui::Id::new("imagem_3d");
+        let atual: Option<(u64, egui::TextureHandle)> = ui.ctx().data(|d| d.get_temp(id));
+        let tex = match atual {
+            Some((k, t)) if k == chave => t,
+            outro => {
+                let img = self.rasterizar(w, h, cam, fundo, esc);
+                let t = match outro {
+                    Some((_, mut t)) => {
+                        t.set(img, egui::TextureOptions::LINEAR);
+                        t
+                    }
+                    None => ui.ctx().load_texture("imagem_3d", img, egui::TextureOptions::LINEAR),
+                };
+                ui.ctx().data_mut(|d| d.insert_temp(id, (chave, t.clone())));
+                t
+            }
+        };
+        painter.image(tex.id(), rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
     }
 }
 
@@ -225,7 +300,7 @@ pub fn janela(ctx: &egui::Context, aberta: &mut bool, cam: &mut Camera, proj: &P
                 ui.checkbox(&mut cam.drenagem, "Drenagem");
                 ui.separator();
                 if ui.button("Frontal").clicked() {
-                    (cam.azimute, cam.elevacao) = (-std::f32::consts::FRAC_PI_2, 0.05);
+                    (cam.azimute, cam.elevacao) = (std::f32::consts::FRAC_PI_2, 0.05);
                 }
                 if ui.button("Lateral").clicked() {
                     (cam.azimute, cam.elevacao) = (0.0, 0.05);
@@ -249,7 +324,8 @@ pub fn janela(ctx: &egui::Context, aberta: &mut bool, cam: &mut Camera, proj: &P
             let (resp, painter) = ui.allocate_painter(egui::vec2(ui.available_width(), alt), Sense::click_and_drag());
             let p = tema::de(ui);
             let escuro = ui.visuals().dark_mode;
-            painter.rect_filled(resp.rect, 8.0, if escuro { Color32::from_rgb(28, 32, 38) } else { Color32::from_rgb(236, 240, 245) });
+            let fundo = if escuro { Color32::from_rgb(28, 32, 38) } else { Color32::from_rgb(236, 240, 245) };
+            painter.rect_filled(resp.rect, 8.0, fundo);
             if resp.dragged() {
                 let d = resp.drag_delta();
                 cam.azimute -= d.x * 0.008;
@@ -264,7 +340,7 @@ pub fn janela(ctx: &egui::Context, aberta: &mut bool, cam: &mut Camera, proj: &P
             if resp.double_clicked() {
                 cam.zoom = 1.0;
             }
-            cn.desenhar(&painter.with_clip_rect(resp.rect), resp.rect, cam);
+            cn.desenhar(ui, &painter.with_clip_rect(resp.rect), resp.rect, cam, fundo);
             painter.rect_stroke(resp.rect, 8.0, Stroke::new(1.0_f32, p.borda), egui::StrokeKind::Inside);
             ui.label(
                 RichText::new(format!(
@@ -281,4 +357,32 @@ pub fn janela(ctx: &egui::Context, aberta: &mut bool, cam: &mut Camera, proj: &P
         });
     *aberta = aberta_local;
     msg
+}
+
+#[cfg(test)]
+mod amostra {
+    use super::*;
+    use crate::projeto::TIPOS_CONTENCAO;
+
+    /// Grava PNGs do 3D de cada tipo (conferência visual): PASTA_3D=pasta.
+    #[test]
+    #[ignore]
+    fn imagens() {
+        let Ok(pasta) = std::env::var("PASTA_3D") else { return };
+        for tipo in TIPOS_CONTENCAO {
+            let mut p = Projeto::default();
+            p.tipo = tipo;
+            p.geometria.h = 4.0;
+            p.pre_dimensionar();
+            let r = p.calcular();
+            for (nome, corte) in [("cheio", false), ("corte", true)] {
+                let cena = Cena::montar(1, Modelo3d::montar(&p, &r, 10.0, corte));
+                let cam = if corte { Camera { corte, ..Camera::default() } } else { Camera { azimute: 1.25, elevacao: 0.25, ..Camera::default() } };
+                let img = cena.rasterizar(900, 600, &cam, Color32::from_rgb(236, 240, 245), 1.0);
+                let px: Vec<u8> = img.pixels.iter().flat_map(|c| [c.r(), c.g(), c.b()]).collect();
+                let im = crate::raster::Imagem { w: 900, h: 600, px };
+                std::fs::write(format!("{pasta}/{}_{nome}.png", tipo.arquivo()), im.png()).unwrap();
+            }
+        }
+    }
 }
