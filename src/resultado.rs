@@ -214,14 +214,17 @@ impl Desenho {
         }
     }
 
-    /// Setas de sobrecarga uniforme sobre um trecho horizontal.
-    pub fn sobrecarga(&mut self, x0: f64, x1: f64, y: f64, altura: f64) {
+    /// Setas de sobrecarga sobre uma superfície `y = sup(x)` (terrapleno em talude).
+    pub fn sobrecarga_sup(&mut self, x0: f64, x1: f64, altura: f64, sup: &dyn Fn(f64) -> f64) {
         let n = ((x1 - x0) / altura).clamp(3.0, 12.0) as usize;
+        let mut topo = Vec::new();
         for i in 0..=n {
             let x = x0 + (x1 - x0) * i as f64 / n as f64;
+            let y = sup(x);
             self.seta([x, y + altura], [x, y]);
+            topo.push([x, y + altura]);
         }
-        self.linha(Estilo::Carga, vec![[x0, y + altura], [x1, y + altura]]);
+        self.linha(Estilo::Carga, topo);
     }
 }
 

@@ -518,7 +518,10 @@ impl CortinaAtirantada {
         let l_max = tirantes.iter().map(|t| t.l_livre + t.l_bulbo).fold(h, f64::max);
         let xe = l_max * 1.05;
         let xi = -0.5 * h;
-        d.retangulo(Estilo::Solo, 0.0, fundo, xe, 0.0);
+        // terrapleno em talude (β) a partir do topo da cortina
+        let tb = rad(self.empuxo.beta).tan();
+        let sup = move |x: f64| x.max(0.0) * tb;
+        d.poli(Estilo::Solo, vec![[0.0, fundo], [xe, fundo], [xe, sup(xe)], [0.0, 0.0]]);
         d.retangulo(Estilo::Solo, xi, fundo, 0.0, -h);
         d.retangulo(Estilo::Concreto, -self.espessura, -lt, 0.0, 0.0);
         if let Some(na) = self.perfil.na() {
@@ -526,15 +529,21 @@ impl CortinaAtirantada {
             d.texto([xe * 0.9, -na + 0.04 * h], "NA");
         }
         if self.cargas.q_uniforme > 0.0 {
-            d.sobrecarga(0.2, xe, 0.0, 0.06 * h);
-            d.texto([xe * 0.6, 0.11 * h], format!("q = {} kPa", fmt(self.cargas.q_uniforme)));
+            d.sobrecarga_sup(0.2, xe, 0.06 * h, &sup);
+            d.texto([xe * 0.6, sup(xe * 0.6) + 0.17 * h], format!("q = {} kPa", fmt(self.cargas.q_uniforme)));
         }
         if rho > 0.0 {
-            d.tracejada(Estilo::Ruptura, vec![[0.0, -h], [h / rho.tan(), 0.0]]);
+            // o plano de ruptura termina na superfície do terrapleno
+            let x_r = if rho.tan() > tb + 1e-9 { h / (rho.tan() - tb) } else { h / rho.tan() };
+            d.tracejada(Estilo::Ruptura, vec![[0.0, -h], [x_r, sup(x_r)]]);
         }
         let i = rad(self.inclinacao);
         for (k, t) in tirantes.iter().enumerate() {
             let p0 = [0.0, -t.z];
+            // trecho através do painel, da cabeça de ancoragem (face externa) até o tardoz
+            let cab = [-self.espessura, -t.z + self.espessura * i.tan()];
+            d.linha(Estilo::Tirante, vec![cab, p0]);
+            d.retangulo(Estilo::Aco, cab[0] - 0.04 * h.min(6.0) / 6.0 - 0.02, cab[1] - 0.12, cab[0], cab[1] + 0.12);
             let p1 = [t.l_livre * i.cos(), -t.z - t.l_livre * i.sin()];
             let l = t.l_livre + t.l_bulbo;
             let p2 = [l * i.cos(), -t.z - l * i.sin()];

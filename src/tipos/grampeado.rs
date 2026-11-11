@@ -7,7 +7,7 @@ use crate::empuxo::{rad, ParamEmpuxo};
 use crate::fatores::Fatores;
 use crate::normas;
 use crate::resultado::{fmt, Desenho, Estilo, Resultado, Verificacao};
-use crate::solo::{Cargas, Perfil};
+use crate::solo::{Cargas, Perfil, GAMMA_W};
 use serde::{Deserialize, Serialize};
 use std::f64::consts::PI;
 
@@ -38,6 +38,10 @@ pub struct SoloGrampeado {
     pub concreto: Concreto,
     pub cargas: Cargas,
     pub empuxo: ParamEmpuxo,
+    /// Altura d'água acima do pé da escavação (m), conforme a condição de
+    /// drenagem. Definida no cálculo, não é salva.
+    #[serde(skip)]
+    pub hw: f64,
 }
 
 impl Default for SoloGrampeado {
@@ -66,6 +70,7 @@ impl Default for SoloGrampeado {
             concreto: c,
             cargas: Cargas::default(),
             empuxo: ParamEmpuxo::default(),
+            hw: 0.0,
         }
     }
 }
@@ -100,19 +105,42 @@ impl SoloGrampeado {
         if t <= 0.0 { self.comprimento } else { (self.comprimento - t).max(0.0) }
     }
 
+    /// Abscissa em que o plano de ruptura de ângulo `omega` (pelo pé) corta o
+    /// terrapleno, que sobe com o talude β a partir da crista da face.
+    /// `None` se o plano não emerge no terrapleno.
+    fn x_topo(&self, omega: f64) -> Option<f64> {
+        let x_ft = self.h * rad(self.incl_face).tan();
+        let b = rad(self.empuxo.beta).tan();
+        let t = omega.tan();
+        if t <= b + 1e-9 {
+            return None;
+        }
+        let x = (self.h - x_ft * b) / (t - b);
+        if x <= x_ft + 1e-6 { None } else { Some(x) }
+    }
+
     fn cunha(&self, omega: f64, zs: &[f64], sismo: bool, gm: f64) -> f64 {
         let h = self.h;
         let eta = rad(self.incl_face);
         let i = rad(self.incl_grampo);
         let phi = rad(self.phi);
         let x_ft = h * eta.tan();
-        let x_top = h / omega.tan();
-        if x_top <= x_ft + 1e-6 {
+        let Some(x_top) = self.x_topo(omega) else {
             return f64::INFINITY;
-        }
-        let w = 0.5 * h * (x_top - x_ft) * self.gamma;
+        };
+        // cunha: pé (0,0), crista da face (x_ft, h) e ponto de emergência no terrapleno
+        let w = 0.5 * x_top * (h - x_ft * omega.tan()) * self.gamma;
         let q = self.cargas.q_uniforme * (x_top - x_ft);
-        let lp = h / omega.sin();
+        let lp = x_top / omega.cos();
+        // poropressão no plano de ruptura: nível d'água horizontal a hw acima do pé
+        let u = if self.hw > 0.0 {
+            let lw = (self.hw / omega.sin()).min(lp);
+            let p0 = GAMMA_W * self.hw;
+            let p1 = GAMMA_W * (self.hw - lw * omega.sin()).max(0.0);
+            0.5 * (p0 + p1) * lw
+        } else {
+            0.0
+        };
         // NBR 16920-2 9.1: Rtd = A·fyk/γm
         let rt = self.area_barra_mm2() * self.fyk_barra / 1000.0 / gm;
         let mut res_g = 0.0;
@@ -128,14 +156,14 @@ impl SoloGrampeado {
         let kv = if sismo { self.cargas.kv } else { 0.0 };
         let wv = w * (1.0 - kv) + q;
         let solic = wv * omega.sin() + kh * w * omega.cos();
-        let normal = (wv * omega.cos() - kh * w * omega.sin()).max(0.0);
+        let normal = (wv * omega.cos() - kh * w * omega.sin() - u).max(0.0);
         (normal * phi.tan() + self.c * lp + res_g) / solic
     }
 
     fn busca(&self, zs: &[f64], sismo: bool, gm: f64) -> Cunha {
         let face = 90.0 - self.incl_face;
         let mut melhor = Cunha { fs: f64::INFINITY, omega: rad(45.0) };
-        let mut g = 10.0;
+        let mut g = 10.0f64.max(self.empuxo.beta + 0.5);
         while g < face - 0.5 {
             let om = rad(g);
             let fs = self.cunha(om, zs, sismo, gm);
@@ -168,7 +196,19 @@ impl SoloGrampeado {
         ));
         r.linha(format!("K ativo ({}) = {} ; Rtd = A·fyk/{} = {} kN (NBR 16920-2 9.1)", self.empuxo.teoria.nome(), fmt(ka), fmt(gm), fmt(rt)));
         if self.empuxo.beta.abs() > 1e-6 {
-            r.aviso("Solo grampeado: terrapleno considerado horizontal na busca de cunhas (β ignorado).");
+            r.linha(format!(
+                "Terrapleno em talude β = {}° a partir da crista da face: entra no peso da cunha (plano pelo pé, ω > β) e em Ka.",
+                fmt(self.empuxo.beta)
+            ));
+            if self.empuxo.beta >= self.phi {
+                r.aviso("β ≥ φ: o próprio talude do terrapleno é instável sem a contribuição da coesão; verifique a estabilidade global.");
+            }
+        }
+        if self.hw > 0.0 {
+            r.linha(format!(
+                "Água no maciço: nível a {} m acima do pé (condição de drenagem) — poropressão U no plano de ruptura reduz a normal efetiva.",
+                fmt(self.hw)
+            ));
         }
         if zs.is_empty() {
             r.aviso("Nenhuma linha de grampos cabe na altura informada.");
@@ -186,7 +226,7 @@ impl SoloGrampeado {
         r.norma(normas::NBR11682_TAB3);
         r.formula(
             "Cunha plana pelo pé — busca do mínimo em ω",
-            "FS = [N·tan φ + c·L + Σ Tn·(cos(ω+i) + sen(ω+i)·tan φ)] / [(W + Q)·sen ω] ;  Tn = mín(π·D·Le·qs ; Rtd) / Sh",
+            "FS = [(N − U)·tan φ + c·L + Σ Tn·(cos(ω+i) + sen(ω+i)·tan φ)] / [(W + Q)·sen ω] ;  Tn = mín(π·D·Le·qs ; Rtd) / Sh ;  U = poropressão no plano (0 se drenado)",
             format!(
                 "γ = {} kN/m³ ;  φ = {}° ;  c = {} kPa ;  q = {} kPa ;  {} linhas de grampos",
                 fmt(self.gamma), fmt(self.phi), fmt(self.c), fmt(self.cargas.q_uniforme), zs.len()
@@ -399,26 +439,70 @@ impl SoloGrampeado {
         let eta = rad(self.incl_face);
         let i = rad(self.incl_grampo);
         let x_ft = h * eta.tan();
-        let xe = x_ft + self.comprimento * 1.4 + 0.3 * h;
+        let x_top = self.x_topo(omega).unwrap_or(h / omega.tan());
+        let xe = (x_ft + self.comprimento * 1.4 + 0.3 * h).max(1.1 * x_top);
         let xi = -0.5 * h;
         let e = self.espessura_face.max(0.02 * h);
         d.retangulo(Estilo::SoloFundacao, xi, -0.3 * h, xe, 0.0);
-        d.poli(Estilo::Solo, vec![[0.0, 0.0], [xe, 0.0], [xe, h], [x_ft, h]]);
+        // terrapleno em talude β a partir da crista da face
+        let tb = rad(self.empuxo.beta).tan();
+        let sup = move |x: f64| h + (x - x_ft).max(0.0) * tb;
+        d.poli(Estilo::Solo, vec![[0.0, 0.0], [xe, 0.0], [xe, sup(xe)], [x_ft, h]]);
         d.poli(Estilo::Concreto, vec![[-e, 0.0], [0.0, 0.0], [x_ft, h], [x_ft - e, h]]);
         for &z in zs {
             let y = h - z;
             let xf = y * eta.tan();
             let l = self.comprimento;
-            d.linha(Estilo::Tirante, vec![[xf, y], [xf + l * i.cos(), y - l * i.sin()]]);
+            // o grampo atravessa o concreto projetado até a placa de cabeça (face externa)
+            let ext = [xf - e, y + e * i.tan()];
+            d.linha(Estilo::Tirante, vec![ext, [xf + l * i.cos(), y - l * i.sin()]]);
+            let meia = 0.5 * self.placa;
+            d.retangulo(Estilo::Aco, ext[0] - 0.04, ext[1] - meia, ext[0], ext[1] + meia);
         }
-        let x_top = h / omega.tan();
-        d.tracejada(Estilo::Ruptura, vec![[0.0, 0.0], [x_top, h]]);
-        d.texto([x_top * 0.6 + 0.15 * h, h * 0.55], format!("ω = {}°", fmt(omega.to_degrees())));
+        d.tracejada(Estilo::Ruptura, vec![[0.0, 0.0], [x_top, x_top * omega.tan()]]);
+        d.texto([x_top * 0.6 + 0.15 * h, x_top * 0.6 * omega.tan() * 0.9], format!("ω = {}°", fmt(omega.to_degrees())));
+        if self.hw > 0.0 {
+            d.tracejada(Estilo::Agua, vec![[0.0, self.hw], [xe, self.hw]]);
+            d.texto([xe * 0.9, self.hw + 0.04 * h], "NA");
+        }
         if self.cargas.q_uniforme > 0.0 {
-            d.sobrecarga(x_ft, xe, h, 0.08 * h);
-            d.texto([xe * 0.75, h + 0.14 * h], format!("q = {} kPa", fmt(self.cargas.q_uniforme)));
+            d.sobrecarga_sup(x_ft, xe, 0.08 * h, &sup);
+            d.texto([xe * 0.75, sup(xe * 0.75) + 0.2 * h], format!("q = {} kPa", fmt(self.cargas.q_uniforme)));
         }
         d.texto([xi * 0.6, h / 2.0], format!("H = {} m", fmt(h)));
         d
+    }
+}
+
+#[cfg(test)]
+mod testes_cunha {
+    use super::*;
+
+    /// Cunha plana pelo pé, talude β = 0, sem grampos, calculada à mão.
+    #[test]
+    fn cunha_sem_grampos_confere_com_calculo_manual() {
+        let mut g = SoloGrampeado::default();
+        g.h = 1.0;
+        g.incl_face = 0.0;
+        g.gamma = 18.0;
+        g.phi = 28.0;
+        g.c = 10.0;
+        g.cargas.q_uniforme = 20.0;
+        // ω = 45°: W = ½·1·1·18 = 9 ; Q = 20·1 = 20 ; L = 1/sen45° = 1,4142
+        // N = 29·cos45° = 20,506 ; T = 29·sen45° = 20,506
+        // FS = (20,506·tan28° + 10·1,4142) / 20,506 = (10,903 + 14,142)/20,506 = 1,2214
+        let fs = g.cunha(45f64.to_radians(), &[], false, 1.15);
+        assert!((fs - 1.2214).abs() < 0.002, "FS = {fs}");
+        // talude β = 10° eleva o peso da cunha → FS menor
+        g.empuxo.beta = 10.0;
+        assert!(g.cunha(45f64.to_radians(), &[], false, 1.15) < fs);
+        // água a 0,5 m acima do pé: U reduz a normal efetiva → FS menor
+        g.empuxo.beta = 0.0;
+        g.hw = 0.5;
+        assert!(g.cunha(45f64.to_radians(), &[], false, 1.15) < fs);
+        // com o talude β = ω a cunha não emerge: FS infinito
+        g.hw = 0.0;
+        g.empuxo.beta = 45.0;
+        assert!(g.cunha(45f64.to_radians(), &[], false, 1.15).is_infinite());
     }
 }

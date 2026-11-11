@@ -347,7 +347,10 @@ impl ParedeEmbutida {
         let fundo = -(lt + 0.15 * h);
         let xe = 1.1 * lt.max(h);
         let xi = -0.9 * lt.max(h);
-        d.retangulo(Estilo::Solo, 0.0, fundo, xe, 0.0);
+        // terrapleno em talude (β) a partir do topo da parede
+        let tb = rad(self.empuxo.beta).tan();
+        let sup = move |x: f64| x.max(0.0) * tb;
+        d.poli(Estilo::Solo, vec![[0.0, fundo], [xe, fundo], [xe, sup(xe)], [0.0, 0.0]]);
         d.retangulo(Estilo::Solo, xi, fundo, 0.0, -h);
         // camadas
         let mut z = 0.0;
@@ -366,12 +369,12 @@ impl ParedeEmbutida {
             d.tracejada(Estilo::Agua, vec![[xi, -na], [0.0, -na]]);
         }
         if self.cargas.q_uniforme > 0.0 {
-            d.sobrecarga(0.2, xe, 0.0, 0.08 * lt);
-            d.texto([xe * 0.6, 0.14 * lt], format!("q = {} kPa", fmt(self.cargas.q_uniforme)));
+            d.sobrecarga_sup(0.2, xe, 0.08 * lt, &sup);
+            d.texto([xe * 0.6, sup(xe * 0.6) + 0.14 * lt], format!("q = {} kPa", fmt(self.cargas.q_uniforme)));
         }
         if self.cargas.usar_faixa {
             let x0 = self.cargas.faixa_dist;
-            d.retangulo(Estilo::Carga, x0, 0.0, x0 + self.cargas.faixa_larg, 0.05 * lt);
+            d.retangulo(Estilo::Carga, x0, sup(x0), x0 + self.cargas.faixa_larg, sup(x0) + 0.05 * lt);
         }
         if self.apoio == Apoio::Ancorada {
             let i = rad(self.incl_apoio);
@@ -479,6 +482,9 @@ impl EstacaPrancha {
         }
         r.aviso("Estabilidade global (NBR 11682) e ruptura de fundo ainda não implementadas.");
         r.desenho = self.parede.desenho(s.as_ref(), 0.012 * self.parede.h.max(4.0), Estilo::Aco);
+        // viga de travamento (chapéu) envolvendo o topo das pranchas
+        r.desenho.retangulo(Estilo::Concreto, -0.20, -self.viga_h, 0.20, 0.0);
+        r.desenho.texto([-0.85 * self.parede.h.max(4.0), -0.5 * self.viga_h], "viga de travamento (chapéu)");
         r
     }
 }
@@ -560,6 +566,10 @@ impl ParedeEstacas {
         r.aviso("Empuxo passivo calculado como parede contínua; para estacas espaçadas a largura efetiva do passivo é limitada (≈ 3D).");
         r.aviso("Estabilidade global (NBR 11682) e ruptura de fundo ainda não implementadas.");
         r.desenho = self.parede.desenho(s.as_ref(), self.diametro, Estilo::Concreto);
+        // viga de travamento (coroamento) sobre as estacas
+        let bv = (self.diametro + 0.20).max(0.40);
+        r.desenho.retangulo(Estilo::Concreto, -bv / 2.0, -self.viga_h, bv / 2.0, 0.0);
+        r.desenho.texto([-0.85 * self.parede.h.max(4.0), -0.5 * self.viga_h], "viga de travamento (coroamento)");
         self.desenhar_secao(&mut r, s.as_ref().map(|x| x.d).unwrap_or(0.5 * self.parede.h));
         r
     }

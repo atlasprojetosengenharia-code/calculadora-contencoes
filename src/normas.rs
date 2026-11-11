@@ -70,6 +70,19 @@ pub const NBR6122_PASSIVO: RefNorma = r(
      durante a vida útil; o valor calculado deve ser reduzido por coeficiente de no mínimo 2,0.",
 );
 
+pub const NBR6122_LASTRO: RefNorma = r(
+    "ABNT NBR 6122:2019",
+    "7.7.3",
+    "Toda parte da fundação rasa em contato com o solo deve ser concretada sobre lastro de concreto não \
+     estrutural com no mínimo 5 cm de espessura, lançado sobre toda a superfície de contato.",
+);
+pub const NBR6122_PROF_MINIMA: RefNorma = r(
+    "ABNT NBR 6122:2019",
+    "7.7.2",
+    "Nas divisas com terrenos vizinhos, salvo fundação assente em rocha, a profundidade de apoio não pode ser \
+     inferior a 1,5 m.",
+);
+
 // --- ABNT NBR 5629:2018 — Tirantes ancorados no terreno ---------------------
 
 pub const NBR5629_ACO: RefNorma = r(

@@ -129,7 +129,7 @@ fn conteudo() -> Vec<B> {
         I("Espessura da face em concreto projetado e placa da cabeça."),
         Sec("Drenagem, cargas e empuxo"),
         I("Drenagem — barbacãs (diâmetro, espaçamentos, altura da 1ª fila, declividade), filtro no tardoz, dreno de pé, \
-           canaleta de crista e DHP. A lâmina d'água define o empuxo hidrostático."),
+           canaleta de crista e DHP. A condição de drenagem altera o cálculo: 'drenada' despreza a água (e exige camada            drenante + barbacãs, ou DHP); 'parcial' e 'sem drenagem' adotam uma lâmina d'água (fração de H) que entra no            empuxo hidrostático, no peso submerso do solo, na subpressão sob a base e, no solo grampeado, na poropressão do            plano de ruptura (NBR 16920-2, 12)."),
         I("Cargas adicionais — carga em faixa (Boussinesq) e ação sísmica (Mononobe-Okabe, kh e kv)."),
         I("Teoria de empuxo — Rankine ou Coulomb (com atrito solo-estrutura δ)."),
         I("Contato base-solo de fundação — atrito tan(k·φ') ou k·tg φ' (Marchetti), com predefinições ⅔φ, 0,67·tg φ \

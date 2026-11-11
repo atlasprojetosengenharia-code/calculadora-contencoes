@@ -689,16 +689,21 @@ impl MuroGravidade {
     fn detalhamento(&self, r: &mut Resultado) {
         let g = self.geo();
         r.titulo("Detalhamento construtivo — muro de gravidade");
+        // inclinação como 1 (H) : n (V), na notação do Marchetti (ex.: 1:12)
+        let incl = |proj: f64| if proj < 0.005 { "vertical".to_string() } else { format!("1:{}", fmt(self.h / proj)) };
         r.linha(format!(
-            "Seção: base {} m ; crista {} m ; altura total {} m (corpo {} m + base {} m) ; paramento 1:{} ; tardoz 1:{}",
+            "Seção: base {} m ; crista {} m ; altura total {} m (corpo {} m + base {} m) ; paramento {} ; tardoz {} (1 horizontal : n vertical)",
             fmt(g.base),
             fmt(self.crista),
             fmt(g.htot),
             fmt(self.h),
             fmt(self.f),
-            fmt(self.proj_frente / self.h.max(1e-6)),
-            fmt(self.proj_tardoz / self.h.max(1e-6))
+            incl(self.proj_frente),
+            incl(self.proj_tardoz)
         ));
+        r.norma(normas::NBR6122_LASTRO);
+        r.norma(normas::NBR6122_PROF_MINIMA);
+        r.linha("Fundação: lastro de concreto não estrutural (e ≥ 5 cm) sob toda a base; apoio a no mínimo 1,5 m de profundidade nas divisas, salvo em rocha.");
         if self.dente && self.dente_h > 0.0 {
             r.linha(format!(
                 "Dente de base: {} m (largura) × {} m (profundidade), sob o pé do paramento, concretado contra o solo sem forma.",
@@ -799,6 +804,10 @@ impl MuroGravidade {
         d.poli(Estilo::Solo, vec![[g.x_pt, f], [b, f], [b, sup(b)], [g.x_cr, ht]]);
         // muro: base + corpo (polígonos convexos)
         d.retangulo(Estilo::Concreto, 0.0, 0.0, b, f);
+        if !(self.dente && self.dente_h > 0.0) {
+            // lastro de concreto magro (NBR 6122 7.7.3), e = 5 cm
+            d.retangulo(Estilo::Concreto, -0.05, -0.05, b + 0.05, 0.0);
+        }
         if self.dente && self.dente_h > 0.0 {
             let x0 = self.x_dente() - self.dente_b / 2.0;
             d.retangulo(Estilo::Concreto, x0, -self.dente_h, x0 + self.dente_b, 0.0);
@@ -1058,5 +1067,49 @@ mod testes {
         // base B×F + trapézio do corpo
         let b_corpo = m.proj_frente + m.crista + m.proj_tardoz;
         assert!((a - (b * m.f + (b_corpo + m.crista) / 2.0 * m.h)).abs() < 1e-9);
+    }
+}
+
+#[cfg(test)]
+mod teste_exemplo_marchetti {
+    use super::*;
+    use crate::fatores::Fatores;
+
+    /// Exemplo 4.1 do Marchetti (2007): H = 5,80 m + base 0,90 m, β = 10°, φ = 32°,
+    /// γ = 18 kN/m³, concreto ciclópico γ = 22 kN/m³; Ea = 141,56, Eh = 139,40 e
+    /// Ev = 24,58 kN/m; FS tombamento = 2,12 (livro) — aqui γc = 24 (NBR 6120).
+    #[test]
+    fn exemplo_4_1_marchetti() {
+        let mut m = MuroGravidade::default();
+        m.material = Material::ConcretoCiclopico;
+        m.h = 5.8;
+        m.f = 0.9;
+        m.crista = 0.45;
+        m.proj_frente = 0.48;
+        m.ressalto_frente = 0.42;
+        m.proj_tardoz = 1.55;
+        m.ressalto_tras = 0.15;
+        m.df = 1.2;
+        m.subpressao = false;
+        m.cargas.q_uniforme = 0.0;
+        m.empuxo.teoria = Teoria::Rankine;
+        m.empuxo.beta = 10.0;
+        m.aterro = Perfil::simples(18.0, 32.0, 0.0);
+        m.fundacao.phi = 36.0;
+        m.fundacao.c = 0.0;
+        let r = m.calcular(&Fatores::default());
+        let empuxo = r
+            .blocos
+            .iter()
+            .find_map(|b| match b {
+                crate::resultado::Bloco::Formula(f) if f.titulo.starts_with("Empuxo ativo resultante") => Some(f.resultado.clone()),
+                _ => None,
+            })
+            .expect("fórmula do empuxo");
+        // livro: Ea = 141,56 ; Eh = 139,40 ; Ev = 24,58 kN/m
+        assert!(empuxo.contains("Pa = 141,5") && empuxo.contains("Ph = 139,4") && empuxo.contains("Pv = 24,58"), "{empuxo}");
+        // livro: FS tombamento = 2,12 com γc = 22; com γc = 24 (NBR 6120) o muro pesa ≈ 9 % mais
+        let fs = r.verificacoes.iter().find(|v| v.nome.starts_with("FS tombamento")).unwrap().valor;
+        assert!((2.0..2.4).contains(&fs), "FS tombamento = {fs}");
     }
 }

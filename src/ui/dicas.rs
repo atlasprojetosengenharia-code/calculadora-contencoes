@@ -16,7 +16,7 @@ fn texto(r: &str) -> Option<&'static str> {
             que mais pesa: o empuxo cresce com H² (solo) e com H (sobrecarga), e os momentos com H³. Com o pré-dimensionamento \
             ligado, a geometria é preenchida pelas proporções do Marchetti (2007).",
         "Inclinação do talude de montante β" => "Inclinação do terreno acima da crista. Aumenta o coeficiente de empuxo ativo \
-            (Rankine/Coulomb) e a componente vertical do empuxo; β não pode superar φ' do aterro.",
+            (Rankine/Coulomb) e a componente vertical do empuxo; β não pode superar φ' do aterro. Aparece no desenho de todos os             tipos; no solo grampeado entra no peso da cunha de ruptura (o plano pelo pé precisa ter ω > β).",
         "Sobrecarga na crista q" => "Carga distribuída sobre o terreno contido (tráfego, edificações, estoque). Gera empuxo \
             uniforme Ka·q em toda a altura — em muros baixos costuma ser a maior parcela. A NBR 11682 (7.3.3) exige no mínimo 20 kPa.",
         "Embutimento (solo à frente) Df" => "Profundidade da base abaixo do terreno à frente do muro. Entra na capacidade de carga \
@@ -159,7 +159,7 @@ fn texto(r: &str) -> Option<&'static str> {
         "Placa da cabeça (lado)" => "Lado da placa de apoio da cabeça do grampo; define o perímetro de punção na face.",
 
         // ---------------- Drenagem ----------------
-        "Lâmina d'água / altura contida" => "Fração da altura com água atrás do muro. Define o empuxo hidrostático (γw·hw²/2) e a subpressão.",
+        "Lâmina d'água / altura contida" => "Fração da altura contida com água atrás da estrutura. Define o empuxo hidrostático (γw·hw²/2) e reduz o peso do solo             (γ'). Em 'parcial' é a lâmina residual de um sistema que funciona mal; em 'sem drenagem', 1,0 = aterro saturado até a             crista (pior caso). No solo grampeado entra como poropressão no plano de ruptura.",
         "Barbacãs" => "Tubos que atravessam o paramento para escoar a água do tardoz. Reduzem a pressão hidrostática.",
         "Diâmetro (tubo PVC)" => "Diâmetro dos barbacãs (usual 75 a 100 mm).",
         "   Espaçamento horizontal" => "Distância horizontal entre barbacãs (usual 1,5 a 2,0 m).",

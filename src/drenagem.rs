@@ -8,6 +8,7 @@
 //! devem considerar a água no dimensionamento.
 
 use crate::normas;
+use crate::projeto::TipoContencao;
 use crate::resultado::{fmt, Desenho, Estilo, Resultado, Verificacao};
 
 /// Critérios de projeto (prática usual — não são exigências da ABNT).
@@ -60,6 +61,9 @@ pub struct Drenagem {
     pub condicao: Condicao,
     /// Altura d'água atrás da contenção como fração da altura contida (Parcial).
     pub fracao_parcial: f64,
+    /// Idem, na condição sem drenagem: sem saída, a água da chuva acumula no
+    /// aterro (1,0 = maciço saturado até a crista, hidrostática; pior caso).
+    pub fracao_sem: f64,
 
     pub barbacas: bool,
     pub diam_barbaca_mm: f64,
@@ -88,6 +92,7 @@ impl Default for Drenagem {
         Self {
             condicao: Condicao::Drenada,
             fracao_parcial: 0.33,
+            fracao_sem: 1.0,
             barbacas: true,
             diam_barbaca_mm: 75.0,
             esp_h: 1.5,
@@ -110,17 +115,42 @@ impl Default for Drenagem {
 impl Drenagem {
     /// Profundidade do NA (a partir do topo do maciço contido) adotada no
     /// cálculo, dada a condição de drenagem.
-    pub fn na_efetivo(&self, na_sondagem: Option<f64>, altura: f64) -> Option<f64> {
-        match self.condicao {
+    pub fn na_efetivo(&self, na_sondagem: Option<f64>, altura: f64, tipo: TipoContencao) -> Option<f64> {
+        let lamina = |f: f64| {
+            let z = altura * (1.0 - f.clamp(0.0, 1.0));
+            Some(match na_sondagem {
+                Some(n) => n.min(z),
+                None => z,
+            })
+        };
+        match self.condicao_efetiva(tipo) {
             Condicao::Drenada => None,
-            Condicao::Parcial => {
-                let z = altura * (1.0 - self.fracao_parcial.clamp(0.0, 1.0));
-                Some(match na_sondagem {
-                    Some(n) => n.min(z),
-                    None => z,
-                })
-            }
-            Condicao::SemDrenagem => na_sondagem,
+            Condicao::Parcial => lamina(self.fracao_parcial),
+            Condicao::SemDrenagem => lamina(self.fracao_sem),
+        }
+    }
+
+    /// O sistema atende ao que a condição 'drenada' pressupõe? Contenções com
+    /// face precisam de camada drenante no tardoz e de saída d'água (barbacãs,
+    /// ou DHP nas atirantadas/grampeadas); nas embutidas a condição só define
+    /// a poropressão adotada.
+    pub fn eficaz(&self, tipo: TipoContencao) -> bool {
+        match tipo {
+            TipoContencao::Prancha | TipoContencao::Estacas => true,
+            // NBR 16920-2, 12.1: geodrenos na face, barbacãs ou DHP, juntos ou isolados
+            TipoContencao::Grampeado => self.filtro || self.barbacas || self.dhp,
+            TipoContencao::Atirantada => (self.filtro && self.barbacas) || self.dhp,
+            _ => self.filtro && self.barbacas,
+        }
+    }
+
+    /// Condição realmente usada no cálculo: 'drenada' sem sistema eficaz é
+    /// tratada como sem drenagem.
+    pub fn condicao_efetiva(&self, tipo: TipoContencao) -> Condicao {
+        if self.condicao == Condicao::Drenada && !self.eficaz(tipo) {
+            Condicao::SemDrenagem
+        } else {
+            self.condicao
         }
     }
 
@@ -162,13 +192,28 @@ impl Drenagem {
     /// Memorial e quantitativos por metro linear de contenção.
     /// `larguras` = comprimento de cada barbacã (espessura do paramento na fila);
     /// `altura_filtro` = altura da camada drenante.
-    pub fn relatar(&self, r: &mut Resultado, altura: f64, larguras: &[f64], altura_filtro: f64) {
+    pub fn relatar(&self, r: &mut Resultado, altura: f64, larguras: &[f64], altura_filtro: f64, tipo: TipoContencao) {
         r.titulo("Drenagem — barbacãs, colchão drenante e drenos (por metro linear)");
         r.norma(normas::NBR11682_DRENAGEM);
 
         // 1. Condição de drenagem e água no cálculo
-        r.linha(format!("Condição adotada no cálculo: {}", self.condicao.nome()));
-        match self.condicao {
+        let cond = self.condicao_efetiva(tipo);
+        r.linha(format!("Condição adotada no cálculo: {}", cond.nome()));
+        if cond != self.condicao {
+            r.aviso(
+                "Condição 'drenada' selecionada, mas sem o sistema que a sustenta (camada drenante + barbacãs, ou DHP): \
+                 o cálculo foi feito como 'sem drenagem'.",
+            );
+        }
+        if self.condicao == Condicao::Drenada && !matches!(tipo, TipoContencao::Prancha | TipoContencao::Estacas) {
+            r.verif(Verificacao::min(
+                "Drenagem: camada drenante + saída d'água (barbacãs ou DHP) previstas para a condição 'drenada'",
+                if self.eficaz(tipo) { 1.0 } else { 0.0 },
+                1.0,
+                "",
+            ));
+        }
+        match cond {
             Condicao::Drenada => {
                 r.formula(
                     "Água no maciço contido — condição drenada",
@@ -191,9 +236,16 @@ impl Drenagem {
                 );
             }
             Condicao::SemDrenagem => {
+                let hw = self.fracao_sem.clamp(0.0, 1.0) * altura;
                 r.norma(normas::NBR16920_DRENAGEM);
+                r.formula(
+                    "Água no maciço contido — sem drenagem",
+                    "hw = f·H ;  U = ½·γw·hw² ;  solo submerso (γ') abaixo do nível d'água",
+                    format!("hw = {}·{} ;  U = ½·10·{}²", fmt(self.fracao_sem), fmt(altura), fmt(hw)),
+                    format!("hw = {} m ;  U = {} kN/m (incluído no empuxo; o NA da sondagem vale se for mais alto)", fmt(hw), fmt(0.5 * 10.0 * hw * hw)),
+                );
                 r.aviso(
-                    "Contenção sem drenagem interna: dimensionada com o NA da sondagem (NBR 16920-2, 12). Verifique se o NA informado é o crítico.",
+                    "Contenção sem drenagem interna: a água acumula atrás da estrutura e entra no empuxo (NBR 16920-2, 12; NBR 11682 7.3.1). Em geral o dimensionamento só fecha com drenagem eficiente e mantida.",
                 );
             }
         }
@@ -331,9 +383,6 @@ impl Drenagem {
                 format!("{} m de dreno por metro de contenção", fmt(self.dhp_comprimento / self.dhp_espacamento.max(0.5))),
             );
         }
-        if !self.barbacas && !self.filtro && !self.dhp && self.condicao == Condicao::Drenada {
-            r.aviso("Condição 'drenada' sem nenhum elemento de drenagem definido — incoerente.");
-        }
     }
 }
 
@@ -345,7 +394,7 @@ mod testes {
     fn memorial_de_drenagem() {
         let d = Drenagem::default();
         let mut r = Resultado::default();
-        d.relatar(&mut r, 4.0, &[0.6, 0.5, 0.4], 3.7);
+        d.relatar(&mut r, 4.0, &[0.6, 0.5, 0.4], 3.7, TipoContencao::Gravidade);
         let nomes: Vec<&str> = r.verificacoes.iter().map(|v| v.nome.as_str()).collect();
         assert!(nomes.iter().any(|n| n.contains("Ø ≥ 75 mm")));
         assert!(nomes.iter().any(|n| n.contains("espessura ≥ 0,30 m")));
@@ -357,11 +406,11 @@ mod testes {
         d2.diam_barbaca_mm = 50.0;
         d2.esp_h = 2.5;
         let mut r2 = Resultado::default();
-        d2.relatar(&mut r2, 4.0, &[0.6], 3.7);
+        d2.relatar(&mut r2, 4.0, &[0.6], 3.7, TipoContencao::Gravidade);
         assert_eq!(r2.verificacoes.iter().filter(|v| !v.ok()).count(), 2);
         // sem barbacãs/filtro aplicáveis (ex.: estaca-prancha): nenhuma verificação
         let mut r3 = Resultado::default();
-        d.relatar(&mut r3, 4.0, &[], 0.0);
+        d.relatar(&mut r3, 4.0, &[], 0.0, TipoContencao::Prancha);
         assert!(r3.verificacoes.is_empty());
     }
 }

@@ -554,6 +554,19 @@ fn ui_drenagem(ui: &mut egui::Ui, d: &mut Drenagem, tipo: TipoContencao) {
             num(ui, "   Lâmina d'água / altura contida", &mut d.fracao_parcial, "", 0.0..=1.0, 0.01);
         });
     }
+    if d.condicao == Condicao::SemDrenagem {
+        grade(ui, "dren_s", |ui| {
+            num(ui, "   Lâmina d'água / altura contida", &mut d.fracao_sem, "", 0.0..=1.0, 0.01);
+        });
+        nota(ui, "Sem saída, a água acumula atrás da estrutura: 1,0 = aterro saturado até a crista (hidrostática). O NA da sondagem vale se for mais alto.");
+    }
+    if d.condicao == Condicao::Drenada && !d.eficaz(tipo) {
+        ui.label(
+            RichText::new("⚠ 'Drenada' exige camada drenante + barbacãs (ou DHP): sem isso o cálculo usa 'sem drenagem'.")
+                .small()
+                .color(tema::de(ui).alerta),
+        );
+    }
     let com_face = !matches!(tipo, TipoContencao::Prancha | TipoContencao::Estacas);
     if !com_face {
         nota(ui, "Para estaca-prancha e parede de estacas, a drenagem atua apenas na poropressão adotada.");

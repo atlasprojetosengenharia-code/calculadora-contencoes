@@ -339,7 +339,7 @@ impl Projeto {
     }
 
     fn perfil_calc(&self) -> crate::solo::Perfil {
-        let na = self.drenagem.na_efetivo(self.sondagem.na(), self.altura_contida());
+        let na = self.drenagem.na_efetivo(self.sondagem.na(), self.altura_contida(), self.tipo);
         self.sondagem.perfil(na)
     }
 
@@ -421,6 +421,12 @@ impl Projeto {
         g.c = c;
         g.cargas = self.cargas_calc();
         g.empuxo = self.empuxo_calc();
+        // água no maciço (condição de drenagem): altura acima do pé da escavação
+        g.hw = self
+            .drenagem
+            .na_efetivo(self.sondagem.na(), g.h, self.tipo)
+            .map(|n| (g.h - n).max(0.0))
+            .unwrap_or(0.0);
         g
     }
 
@@ -454,9 +460,9 @@ impl Projeto {
             "NA da sondagem: {} ; NA adotado no cálculo: {}",
             s.na().map(|n| format!("{} m", fmt(n))).unwrap_or("não encontrado".into()),
             self.drenagem
-                .na_efetivo(s.na(), self.altura_contida())
-                .map(|n| format!("{} m (condição: {})", fmt(n), self.drenagem.condicao.nome()))
-                .unwrap_or(format!("sem água (condição: {})", self.drenagem.condicao.nome()))
+                .na_efetivo(s.na(), self.altura_contida(), self.tipo)
+                .map(|n| format!("{} m (condição: {})", fmt(n), self.drenagem.condicao_efetiva(self.tipo).nome()))
+                .unwrap_or(format!("sem água (condição: {})", self.drenagem.condicao_efetiva(self.tipo).nome()))
         )));
         let (eq_phi, nome_phi) = match s.metodo_phi {
             crate::spt::MetodoPhi::Teixeira1996 => ("φ' = √(20·N) + 15  (≤ 45°)", "Teixeira (1996)"),
@@ -614,7 +620,7 @@ impl Projeto {
             }
             TipoContencao::Prancha | TipoContencao::Estacas => {}
         }
-        dr.relatar(r, self.altura_contida(), &larguras, altura_filtro);
+        dr.relatar(r, self.altura_contida(), &larguras, altura_filtro, self.tipo);
     }
 }
 
@@ -685,6 +691,118 @@ mod testes_predim {
                 p.geometria.engaste = d - 0.25;
                 assert_eq!(ok(&p), Some(false));
             }
+        }
+    }
+
+    /// Razão de utilização invertida de cada verificação (≥ 1 atende), por nome.
+    fn margens(p: &Projeto) -> std::collections::HashMap<String, f64> {
+        use crate::resultado::Criterio;
+        p.calcular()
+            .verificacoes
+            .iter()
+            .filter(|v| !v.nome.starts_with("Drenagem:") && !v.nome.starts_with("Barbacãs") && !v.nome.starts_with("Colchão"))
+            .filter_map(|v| {
+                let m = match v.criterio {
+                    Criterio::Minimo if v.limite > 0.0 => v.valor / v.limite,
+                    Criterio::Maximo if v.valor > 0.0 => v.limite / v.valor,
+                    // demanda informativa (quanto maior, menor a margem)
+                    Criterio::Info if (v.nome.starts_with("Ficha de projeto") || v.nome.starts_with("Momento máximo")) && v.valor > 0.0 => {
+                        1.0 / v.valor
+                    }
+                    _ => return None,
+                };
+                m.is_finite().then(|| (v.nome.clone(), m))
+            })
+            .collect()
+    }
+
+    /// Menor margem do cálculo.
+    fn fs_minimo(p: &Projeto) -> f64 {
+        margens(p).values().cloned().fold(f64::INFINITY, f64::min)
+    }
+
+    #[test]
+    fn condicao_de_drenagem_altera_o_calculo() {
+        use crate::drenagem::Condicao;
+        for tipo in TIPOS_CONTENCAO {
+            let mut p = Projeto::default();
+            p.tipo = tipo;
+            p.geometria.h = 5.0;
+            p.pre_dimensionar();
+            // NA da sondagem abaixo do pé (6 m): antes, 'sem drenagem' = 'drenada'
+            let mut m = Vec::new();
+            for c in [Condicao::Drenada, Condicao::Parcial, Condicao::SemDrenagem] {
+                p.drenagem.condicao = c;
+                m.push(margens(&p));
+            }
+            let piora = |a: &std::collections::HashMap<String, f64>, b: &std::collections::HashMap<String, f64>| {
+                // nenhuma verificação melhora e ao menos uma piora
+                let comuns: Vec<_> = a.keys().filter(|k| b.contains_key(*k)).collect();
+                // (a carga dos tirantes se redistribui entre os níveis e a reação da ficha:
+                // pode cair num apoio quando a água aumenta a reação noutro)
+                let por_tirante = |k: &str| k.starts_with("Tirante") || k.starts_with("Carga máx") || k.starts_with("Punção");
+                let nenhuma_melhora = comuns.iter().all(|k| por_tirante(k) || b[*k] <= a[*k] + 1e-6);
+                let alguma_piora = comuns.iter().any(|k| b[*k] < a[*k] - 1e-6);
+                (nenhuma_melhora, alguma_piora)
+            };
+            let (ok1, p1) = piora(&m[0], &m[1]);
+            let (ok2, p2) = piora(&m[0], &m[2]);
+            eprintln!("{}: parcial piora {p1} (sem melhora {ok1}) | sem drenagem piora {p2} (sem melhora {ok2})", tipo.nome());
+            assert!(ok1 && ok2, "{}: a água não pode melhorar nenhuma verificação", tipo.nome());
+            assert!(p1 && p2, "{}: a condição de drenagem deve alterar o cálculo", tipo.nome());
+        }
+    }
+
+    #[test]
+    fn drenada_exige_sistema_eficaz() {
+        use crate::drenagem::Condicao;
+        let mut p = Projeto::default();
+        p.tipo = TipoContencao::Gravidade;
+        p.geometria.h = 4.0;
+        p.drenagem.condicao = Condicao::Drenada;
+        let ok = fs_minimo(&p);
+        p.drenagem.filtro = false;
+        let sem_filtro = fs_minimo(&p);
+        assert!(sem_filtro < ok - 1e-6, "sem camada drenante a condição 'drenada' não se sustenta");
+        let r = p.calcular();
+        assert!(r.verificacoes.iter().any(|v| v.nome.starts_with("Drenagem:") && !v.ok()));
+        // DHP sustenta a drenagem da cortina atirantada mesmo sem barbacãs
+        p.tipo = TipoContencao::Atirantada;
+        p.drenagem.barbacas = false;
+        p.drenagem.dhp = true;
+        assert!(p.drenagem.eficaz(p.tipo));
+    }
+
+    #[test]
+    fn grampeado_talude_e_agua() {
+        let mut p = Projeto::default();
+        p.tipo = TipoContencao::Grampeado;
+        p.geometria.h = 6.0;
+        p.pre_dimensionar();
+        let plano = fs_minimo(&p);
+        p.geometria.beta = 15.0;
+        let talude = fs_minimo(&p);
+        assert!(talude < plano, "talude a montante deve reduzir o FS: {talude} x {plano}");
+        let r = p.calcular();
+        assert!(!r.avisos.iter().any(|a| a.contains("β ignorado")));
+    }
+
+    /// Auxiliar de desenvolvimento: grava o DXF de cada tipo
+    /// (`DXF_AMOSTRA=<pasta> DXF_BETA=<graus> DXF_H=<m> cargo test amostras_dxf`).
+    #[test]
+    fn amostras_dxf() {
+        let Ok(pasta) = std::env::var("DXF_AMOSTRA") else { return };
+        let beta: f64 = std::env::var("DXF_BETA").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0);
+        let h: f64 = std::env::var("DXF_H").ok().and_then(|v| v.parse().ok()).unwrap_or(5.0);
+        for tipo in TIPOS_CONTENCAO {
+            let mut p = Projeto::default();
+            p.tipo = tipo;
+            p.geometria.h = h;
+            p.geometria.beta = beta;
+            p.pre_dimensionar();
+            let r = p.calcular();
+            let dxf = crate::dxf::gerar(&r.desenho, &r.armaduras, tipo.arquivo(), &[], "teste");
+            std::fs::write(format!("{pasta}/{}.dxf", tipo.arquivo()), dxf).unwrap();
         }
     }
 

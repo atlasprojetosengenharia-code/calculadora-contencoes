@@ -402,6 +402,9 @@ impl MuroFlexao {
             ));
         }
         r.linha("Juntas de dilatação a cada 15 a 20 m (critério usual), com mata-junta no tardoz; drenagem conforme a seção “Drenagem”.");
+        r.norma(normas::NBR6122_LASTRO);
+        r.norma(normas::NBR6122_PROF_MINIMA);
+        r.linha("Fundação: lastro de concreto não estrutural (e ≥ 5 cm) sob toda a sapata; apoio a no mínimo 1,5 m de profundidade nas divisas, salvo em rocha.");
         r.armaduras.extend(tab);
         DetalheFlexao { cob, l0t: l0t / 100.0, lb_n7: n1.lb_cm / 100.0, rotulos: r.armaduras.iter().map(|a| a.descricao()).collect() }
     }
@@ -476,6 +479,10 @@ impl MuroFlexao {
         d.poli(Estilo::Solo, vec![[bp + tb, hs], [b, hs], [b, hv], [bp + tt, h]]);
         d.poli(Estilo::Solo, vec![[b, 0.0], [xe, 0.0], [xe, sup(xe)], [b, hv]]);
         d.retangulo(Estilo::Concreto, 0.0, 0.0, b, hs);
+        if !(self.dente && self.dente_h > 0.0) {
+            // lastro de concreto magro (NBR 6122 7.7.3), e = 5 cm
+            d.retangulo(Estilo::Concreto, -0.05, -0.05, b + 0.05, 0.0);
+        }
         if self.dente && self.dente_h > 0.0 {
             let x0 = bp + tb / 2.0 - self.dente_b / 2.0;
             d.retangulo(Estilo::Concreto, x0, -self.dente_h, x0 + self.dente_b, 0.0);
@@ -542,5 +549,55 @@ mod testes {
         let sem = fs(&m);
         m.dente = true;
         assert!(fs(&m) > sem);
+    }
+}
+
+#[cfg(test)]
+mod teste_exemplo_marchetti {
+    use super::*;
+    use crate::empuxo::Teoria;
+    use crate::fatores::Fatores;
+    use crate::solo::Perfil;
+
+    /// Exemplo 4.2 do Marchetti (2007): H = 5,50 m, φ = 28°, γ = 18 kN/m³, q = 25 kPa,
+    /// base 3,85 m (ponta 0,55 ; parede 0,45 ; talão 2,85), solo da base φ = 34°.
+    /// Livro: Ea = 98,28 + 49,66 = 147,94 kN/m ; FS tombamento = 2,84 ;
+    /// σmáx = 187 e σmín = 26 kPa. (O livro usa sapata de espessura variável,
+    /// média ≈ 0,34 m; aqui, sapata constante de 0,34 m.)
+    #[test]
+    fn exemplo_4_2_marchetti() {
+        let mut m = MuroFlexao::default();
+        m.h = 5.5;
+        m.t_topo = 0.20;
+        m.t_base = 0.45;
+        m.h_sapata = 0.34;
+        m.b_ponta = 0.55;
+        m.b_talao = 2.85;
+        m.df = 0.0;
+        m.considerar_passivo = false;
+        m.subpressao = false;
+        m.cargas.q_uniforme = 25.0;
+        m.empuxo.teoria = Teoria::Rankine;
+        m.empuxo.beta = 0.0;
+        m.aterro = Perfil::simples(18.0, 28.0, 0.0);
+        m.fundacao.phi = 34.0;
+        m.fundacao.c = 0.0;
+        m.concreto.peso = crate::materiais::CONCRETO_ARMADO;
+        let mut fat = Fatores::default();
+        fat.sobrecarga_talao_estabilizante = true;
+        let r = m.calcular(&fat);
+        let empuxo = r
+            .blocos
+            .iter()
+            .find_map(|b| match b {
+                crate::resultado::Bloco::Formula(f) if f.titulo.starts_with("Empuxo ativo resultante") => Some(f.resultado.clone()),
+                _ => None,
+            })
+            .expect("fórmula do empuxo");
+        // livro: Ea = 98,28 (solo) + 49,66 (sobrecarga) = 147,94 kN/m
+        assert!(empuxo.contains("Pa = 147,9"), "{empuxo}");
+        // livro: FS tombamento = 2,84 ; aqui 2,92 porque o solo sobre o tardoz inclinado do fuste também pesa
+        let fs = r.verificacoes.iter().find(|v| v.nome.starts_with("FS tombamento")).unwrap().valor;
+        assert!((2.7..3.05).contains(&fs), "FS tombamento = {fs}");
     }
 }
