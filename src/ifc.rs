@@ -146,6 +146,12 @@ pub fn gerar(m: &Modelo3d, proj: &Projeto) -> String {
             Classe::Tirante => format!("IFCMEMBER({gid},$,{n},$,'TIRANTE',#{lp},#{pds},$,.USERDEFINED.)"),
             Classe::Grampo => format!("IFCMEMBER({gid},$,{n},$,'GRAMPO',#{lp},#{pds},$,.USERDEFINED.)"),
             Classe::Terreno => format!("IFCGEOGRAPHICELEMENT({gid},$,{n},$,$,#{lp},#{pds},$,.TERRAIN.)"),
+            Classe::Placa => format!("IFCPLATE({gid},$,{n},$,'PLACA DE ANCORAGEM',#{lp},#{pds},$,.USERDEFINED.)"),
+            Classe::Cabeca => format!("IFCMECHANICALFASTENER({gid},$,{n},$,$,#{lp},#{pds},$,$,$,.ANCHORBOLT.)"),
+            Classe::Tubo => format!("IFCPIPESEGMENT({gid},$,{n},$,$,#{lp},#{pds},$,.RIGIDSEGMENT.)"),
+            Classe::Filtro => format!("IFCBUILDINGELEMENTPROXY({gid},$,{n},$,'FILTRO DRENANTE',#{lp},#{pds},$,.USERDEFINED.)"),
+            Classe::Canaleta => format!("IFCBUILDINGELEMENTPROXY({gid},$,{n},$,'CANALETA',#{lp},#{pds},$,.USERDEFINED.)"),
+            Classe::Viga => format!("IFCBEAM({gid},$,{n},$,$,#{lp},#{pds},$,.BEAM.)"),
         });
         elementos.push(el);
         let mn = pc.material.nome();
@@ -245,7 +251,7 @@ mod testes {
             match tipo {
                 TipoContencao::Estacas => assert!(s.contains("IFCPILE(")),
                 TipoContencao::Flexao | TipoContencao::Gravidade => assert!(s.contains("IFCFOOTING(") && s.contains("IFCWALL(")),
-                TipoContencao::Atirantada => assert!(s.contains("'TIRANTE'")),
+                TipoContencao::Atirantada => assert!(s.contains("'TIRANTE'") && s.contains("IFCPLATE(") && s.contains("IFCMECHANICALFASTENER(") && s.contains("IFCPIPESEGMENT(")),
                 TipoContencao::Grampeado => assert!(s.contains("'GRAMPO'")),
                 _ => {}
             }

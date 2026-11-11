@@ -23,6 +23,9 @@ pub enum Material {
     Bulbo,
     Grampo,
     Terreno,
+    Brita,
+    Areia,
+    Geocomposto,
 }
 
 impl Material {
@@ -37,6 +40,9 @@ impl Material {
             Material::Bulbo => "Calda de cimento — bulbo",
             Material::Grampo => "Grampo — barra e calda",
             Material::Terreno => "Terreno",
+            Material::Brita => "Brita envolta em geotêxtil",
+            Material::Areia => "Areia grossa (filtro)",
+            Material::Geocomposto => "Geocomposto drenante",
         }
     }
     /// Cor RGB (0–1) e transparência (0 = opaco).
@@ -51,6 +57,9 @@ impl Material {
             Material::Bulbo => ([0.80, 0.35, 0.10], 0.0),
             Material::Grampo => ([0.85, 0.20, 0.20], 0.0),
             Material::Terreno => ([0.55, 0.47, 0.30], 0.55),
+            Material::Brita => ([0.50, 0.52, 0.55], 0.25),
+            Material::Areia => ([0.86, 0.78, 0.55], 0.25),
+            Material::Geocomposto => ([0.20, 0.35, 0.25], 0.0),
         }
     }
 }
@@ -65,6 +74,17 @@ pub enum Classe {
     Tirante,
     Grampo,
     Terreno,
+    /// Placa de ancoragem (tirante ou grampo).
+    Placa,
+    /// Cabeça de ancoragem (porca, cunhas, bloco).
+    Cabeca,
+    /// Tubos de drenagem: barbacãs, dreno de pé, DHP.
+    Tubo,
+    /// Camada drenante junto ao tardoz.
+    Filtro,
+    Canaleta,
+    /// Viga de travamento (longarina) de parede ancorada.
+    Viga,
 }
 
 #[derive(Clone, Debug)]
@@ -77,6 +97,8 @@ pub enum Forma {
     Barra { p0: [f64; 3], p1: [f64; 3], diam: f64 },
     /// Superfície do terreno: polilinha (x, y) estendida de z0 a z1.
     Superficie { linha: Vec<[f64; 2]>, z0: f64, z1: f64 },
+    /// Malha já triangulada (peças orientadas, como placas).
+    Malha(Vec<Tri>),
 }
 
 #[derive(Clone, Debug)]
@@ -214,6 +236,7 @@ impl Forma {
                 }
                 v
             }
+            Forma::Malha(t) => t.clone(),
             Forma::Superficie { linha, z0, z1 } => {
                 let mut v = Vec::new();
                 for s in linha.windows(2) {
@@ -225,6 +248,35 @@ impl Forma {
             }
         }
     }
+}
+
+fn fmt0(x: f64) -> String {
+    format!("{:.0}", x)
+}
+
+/// Dois vetores unitários perpendiculares ao eixo (e entre si).
+fn base_eixo(a: [f64; 3]) -> ([f64; 3], [f64; 3]) {
+    let aux = if a[1].abs() < 0.9 { [0.0, 1.0, 0.0] } else { [1.0, 0.0, 0.0] };
+    let u = norm(cruz3(a, aux));
+    (u, cruz3(a, u))
+}
+
+/// Paralelepípedo de centro `c`, eixos unitários `a`, `u`, `w` e meias-dimensões.
+fn caixa_orientada(c: [f64; 3], a: [f64; 3], u: [f64; 3], w: [f64; 3], ha: f64, hu: f64, hw: f64) -> Vec<Tri> {
+    let v = |sa: f64, su: f64, sw: f64| {
+        [
+            c[0] + sa * ha * a[0] + su * hu * u[0] + sw * hw * w[0],
+            c[1] + sa * ha * a[1] + su * hu * u[1] + sw * hw * w[1],
+            c[2] + sa * ha * a[2] + su * hu * u[2] + sw * hw * w[2],
+        ]
+    };
+    let p = [v(-1.0, -1.0, -1.0), v(1.0, -1.0, -1.0), v(1.0, 1.0, -1.0), v(-1.0, 1.0, -1.0), v(-1.0, -1.0, 1.0), v(1.0, -1.0, 1.0), v(1.0, 1.0, 1.0), v(-1.0, 1.0, 1.0)];
+    let mut t = Vec::new();
+    for q in [[0, 3, 2, 1], [4, 5, 6, 7], [0, 1, 5, 4], [1, 2, 6, 5], [2, 3, 7, 6], [3, 0, 4, 7]] {
+        t.push([p[q[0]], p[q[1]], p[q[2]]]);
+        t.push([p[q[0]], p[q[2]], p[q[3]]]);
+    }
+    t
 }
 
 /// Polígono circular em planta (x, z).
@@ -338,7 +390,7 @@ impl Modelo3d {
                     material: mat,
                     forma: Forma::Vertical { planta: perfil_prancha(forma, b, hp, t.max(0.004), l, 0.0), y0: -lt, y1: 0.0 },
                 });
-                md.apoios_embutida(&e.parede, h, lt, l);
+                md.apoios_embutida(&e.parede, h, lt, l, -hp / 2.0, e.viga_h);
             }
             TipoContencao::Estacas => {
                 let e = p.preparar_estacas();
@@ -353,7 +405,7 @@ impl Modelo3d {
                         forma: Forma::Vertical { planta: circulo(0.0, z, e.diametro, 20), y0: -lt, y1: 0.0 },
                     });
                 }
-                md.apoios_embutida(&e.parede, h, lt, l);
+                md.apoios_embutida(&e.parede, h, lt, l, -e.diametro / 2.0, 0.5);
             }
             TipoContencao::Grampeado => {
                 let g = p.preparar_grampeado();
@@ -383,12 +435,15 @@ impl Modelo3d {
                 for z in posicoes(l, espac) {
                     let p3 = |q: [f64; 2]| pt(q[0], q[1], z);
                     if p.tipo == TipoContencao::Atirantada {
+                        // face frontal da cortina (x = −espessura) no eixo do tirante
+                        let s_face = -p.atirantada.espessura / rf.dir[0].max(0.1);
                         md.pecas.push(Peca {
                             nome: format!("Tirante nível {} — trecho livre", k + 1),
                             classe: Classe::Tirante,
                             material: Material::TiranteLivre,
-                            forma: Forma::Barra { p0: p3(rf.p0), p1: p3(fim(rf.livre)), diam: 0.04 },
+                            forma: Forma::Barra { p0: p3(fim(s_face)), p1: p3(fim(rf.livre)), diam: 0.04 },
                         });
+                        md.cabeca(k + 1, p3(fim(s_face)), [rf.dir[0], rf.dir[1], 0.0], p.atirantada.placa.max(0.15), true);
                         md.pecas.push(Peca {
                             nome: format!("Tirante nível {} — bulbo", k + 1),
                             classe: Classe::Tirante,
@@ -402,10 +457,21 @@ impl Modelo3d {
                             material: Material::Grampo,
                             forma: Forma::Barra { p0: p3(rf.p0), p1: p3(fim(rf.comprimento)), diam: furo.max(0.05) },
                         });
+                        // trecho na face de concreto projetado e cabeça na face externa
+                        let e = p.grampeado.espessura_face.max(0.05);
+                        let frente = [rf.p0[0] - e, rf.p0[1]];
+                        md.pecas.push(Peca {
+                            nome: format!("Grampo linha {} — barra na face", k + 1),
+                            classe: Classe::Grampo,
+                            material: Material::Aco,
+                            forma: Forma::Barra { p0: p3(frente), p1: p3(rf.p0), diam: (p.grampeado.diam_barra / 1000.0).max(0.012) },
+                        });
+                        md.cabeca(k + 1, p3(frente), [rf.dir[0], rf.dir[1], 0.0], p.grampeado.placa.max(0.10), false);
                     }
                 }
             }
         }
+        md.drenagem(p, l);
         for pc in &md.pecas {
             if let Forma::Barra { p1, .. } = pc.forma {
                 amplia(p1[0]);
@@ -437,7 +503,7 @@ impl Modelo3d {
     }
 
     /// Tirantes/estroncas de paredes embutidas ancoradas (comprimento indicativo).
-    fn apoios_embutida(&mut self, par: &crate::tipos::embutida::ParedeEmbutida, h: f64, lt: f64, l: f64) {
+    fn apoios_embutida(&mut self, par: &crate::tipos::embutida::ParedeEmbutida, h: f64, lt: f64, l: f64, x_face: f64, viga_h: f64) {
         if par.apoio != Apoio::Ancorada {
             return;
         }
@@ -446,15 +512,126 @@ impl Modelo3d {
         let livre = 0.45 * comp;
         let dir = [a.cos(), -a.sin()];
         let y0 = -par.prof_apoio;
+        // viga de travamento (longarina) na face escavada, na cota dos tirantes
+        let (vb, vh) = (0.30, viga_h.clamp(0.20, 1.0));
+        let xv = x_face - vb;
+        self.pecas.push(Peca {
+            nome: "Viga de travamento (longarina)".into(),
+            classe: Classe::Viga,
+            material: Material::Concreto,
+            forma: Forma::Extrusao { secao: vec![[xv, y0 - vh / 2.0], [x_face, y0 - vh / 2.0], [x_face, y0 + vh / 2.0], [xv, y0 + vh / 2.0]], z0: 0.0, z1: l },
+        });
         for z in posicoes(l, par.espac_apoio) {
             let q = |s: f64| pt(dir[0] * s, y0 + dir[1] * s, z);
-            self.pecas.push(Peca { nome: "Tirante — trecho livre".into(), classe: Classe::Tirante, material: Material::TiranteLivre, forma: Forma::Barra { p0: q(0.0), p1: q(livre), diam: 0.04 } });
+            let s_face = xv / dir[0].max(0.1);
+            self.pecas.push(Peca { nome: "Tirante — trecho livre".into(), classe: Classe::Tirante, material: Material::TiranteLivre, forma: Forma::Barra { p0: q(s_face), p1: q(livre), diam: 0.04 } });
+            self.cabeca(1, q(s_face), [dir[0], dir[1], 0.0], 0.25, true);
             self.pecas.push(Peca { nome: "Tirante — bulbo".into(), classe: Classe::Tirante, material: Material::Bulbo, forma: Forma::Barra { p0: q(livre), p1: q(comp), diam: 0.15 } });
         }
         self.notas.push(format!(
             "Tirantes da parede ancorada com comprimento indicativo ({} m): dimensionar o bulbo e o trecho livre conforme a NBR 5629.",
             crate::resultado::fmt(comp)
         ));
+    }
+
+    /// Cabeça de ancoragem na face externa: placa perpendicular ao eixo e,
+    /// para tirantes, bloco de cunhas com a ponta da cordoalha; para grampos,
+    /// porca sextavada com a ponta da barra rosqueada.
+    fn cabeca(&mut self, nivel: usize, face: [f64; 3], dir: [f64; 3], placa: f64, tirante: bool) {
+        let a = norm(dir);
+        let (u, w) = base_eixo(a);
+        let tp = if tirante { 0.032 } else { 0.019 };
+        let fora = |s: f64| [face[0] - a[0] * s, face[1] - a[1] * s, face[2] - a[2] * s];
+        let tipo = if tirante { "Tirante" } else { "Grampo" };
+        self.pecas.push(Peca {
+            nome: format!("{tipo} nível {nivel} — placa de ancoragem {}×{} cm", fmt0(100.0 * placa), fmt0(100.0 * placa)),
+            classe: Classe::Placa,
+            material: Material::Aco,
+            forma: Forma::Malha(caixa_orientada(fora(tp / 2.0), a, u, w, tp / 2.0, placa / 2.0, placa / 2.0)),
+        });
+        let (comp, d, ponta, dp) = if tirante { (0.10, 0.11, 0.10, 0.04) } else { (0.05, 0.055, 0.06, 0.025) };
+        self.pecas.push(Peca {
+            nome: format!("{tipo} nível {nivel} — {}", if tirante { "cabeça (bloco de cunhas)" } else { "porca" }),
+            classe: Classe::Cabeca,
+            material: Material::Aco,
+            forma: Forma::Barra { p0: fora(tp), p1: fora(tp + comp), diam: d },
+        });
+        self.pecas.push(Peca {
+            nome: format!("{tipo} nível {nivel} — ponta {}", if tirante { "da cordoalha" } else { "da barra" }),
+            classe: Classe::Cabeca,
+            material: Material::Aco,
+            forma: Forma::Barra { p0: fora(tp + comp), p1: fora(tp + comp + ponta), diam: dp },
+        });
+    }
+
+    /// Drenagem: barbacãs (em quincôncio), camada drenante junto ao tardoz,
+    /// dreno de pé, canaletas e drenos horizontais profundos.
+    fn drenagem(&mut self, p: &Projeto, l: f64) {
+        let dr = &p.drenagem;
+        let gd = p.geo_drenagem();
+        let d_barb = (dr.diam_barbaca_mm / 1000.0).max(0.04);
+        for (i, (t, f)) in gd.barbacas.iter().enumerate() {
+            // prolonga 5 cm para dentro do filtro e 5 cm para fora da face
+            let (dx, dy) = (f[0] - t[0], f[1] - t[1]);
+            let n = (dx * dx + dy * dy).sqrt().max(1e-6);
+            let a = [t[0] - 0.05 * dx / n, t[1] - 0.05 * dy / n];
+            let b = [f[0] + 0.05 * dx / n, f[1] + 0.05 * dy / n];
+            let desl = if i % 2 == 1 { dr.esp_h / 2.0 } else { 0.0 };
+            for z in posicoes(l, dr.esp_h) {
+                let z = z + desl;
+                if z > l - 0.05 {
+                    continue;
+                }
+                self.pecas.push(Peca {
+                    nome: format!("Barbacã PVC Ø{} mm — fila {}", fmt0(dr.diam_barbaca_mm), i + 1),
+                    classe: Classe::Tubo,
+                    material: Material::Pvc,
+                    forma: Forma::Barra { p0: pt(a[0], a[1], z), p1: pt(b[0], b[1], z), diam: d_barb },
+                });
+            }
+        }
+        if let Some((p0, p1)) = gd.filtro {
+            let e = dr.esp_filtro.max(0.02);
+            let (mat, nome) = match dr.material_filtro {
+                crate::drenagem::MaterialFiltro::AreiaGrossa => (Material::Areia, "Filtro de areia grossa"),
+                crate::drenagem::MaterialFiltro::BritaGeotextil => (Material::Brita, "Dreno de brita envolto em geotêxtil"),
+                crate::drenagem::MaterialFiltro::Geocomposto => (Material::Geocomposto, "Geocomposto drenante"),
+            };
+            self.pecas.push(Peca {
+                nome: format!("{nome} junto ao tardoz (e = {} cm)", fmt0(100.0 * e)),
+                classe: Classe::Filtro,
+                material: mat,
+                forma: Forma::Extrusao { secao: vec![p0, [p0[0] + e, p0[1]], [p1[0] + e, p1[1]], p1], z0: 0.0, z1: l },
+            });
+            if dr.dreno_pe {
+                let dpe = (dr.diam_dreno_pe_mm / 1000.0).max(0.06);
+                let (x, y) = (p0[0] + e / 2.0, p0[1] + dpe * 0.7);
+                self.pecas.push(Peca {
+                    nome: format!("Dreno de pé — tubo perfurado Ø{} mm", fmt0(dr.diam_dreno_pe_mm)),
+                    classe: Classe::Tubo,
+                    material: Material::Pvc,
+                    forma: Forma::Barra { p0: pt(x, y, 0.0), p1: pt(x, y, l), diam: dpe },
+                });
+            }
+        }
+        for c in &gd.canaletas {
+            let (xc, y) = (c[0], c[1]);
+            let u = vec![
+                [xc - 0.15, y], [xc - 0.10, y - 0.25], [xc + 0.10, y - 0.25], [xc + 0.15, y],
+                [xc + 0.10, y], [xc + 0.075, y - 0.20], [xc - 0.075, y - 0.20], [xc - 0.10, y],
+            ];
+            self.pecas.push(Peca { nome: "Canaleta de concreto".into(), classe: Classe::Canaleta, material: Material::Concreto, forma: Forma::Extrusao { secao: u, z0: 0.0, z1: l } });
+        }
+        for (a, b) in &gd.dhp {
+            for z in posicoes(l, dr.dhp_espacamento) {
+                self.pecas.push(Peca {
+                    nome: "Dreno horizontal profundo (DHP)".into(),
+                    classe: Classe::Tubo,
+                    material: Material::Pvc,
+                    forma: Forma::Barra { p0: pt(a[0], a[1], z), p1: pt(b[0], b[1], z), diam: 0.05 },
+                });
+            }
+        }
     }
 
     /// Caixa envolvente (mín, máx).
@@ -512,6 +689,12 @@ mod testes {
             assert!(b[2] - a[2] >= 9.9, "trecho de 10 m");
             if tipo == TipoContencao::Grampeado || tipo == TipoContencao::Atirantada {
                 assert!(m.pecas.iter().any(|x| matches!(x.classe, Classe::Grampo | Classe::Tirante)), "{}", tipo.nome());
+                assert!(m.pecas.iter().any(|x| x.classe == Classe::Placa) && m.pecas.iter().any(|x| x.classe == Classe::Cabeca), "{}: cabeças", tipo.nome());
+            }
+            if matches!(tipo, TipoContencao::Gravidade | TipoContencao::Flexao | TipoContencao::Atirantada | TipoContencao::Grampeado) {
+                assert!(m.pecas.iter().any(|x| x.classe == Classe::Tubo && x.nome.starts_with("Barbacã")), "{}: barbacãs", tipo.nome());
+                assert!(m.pecas.iter().any(|x| x.classe == Classe::Filtro), "{}: filtro", tipo.nome());
+                assert!(m.pecas.iter().any(|x| x.nome.starts_with("Dreno de pé")), "{}: dreno de pé", tipo.nome());
             }
         }
     }

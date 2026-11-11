@@ -270,13 +270,6 @@ impl Drenagem {
         v
     }
 
-    /// Desenha um barbacã do tardoz (`xt`) até a face (`xf`) na cota `y`,
-    /// descendo com a declividade adotada.
-    pub fn barbaca(&self, d: &mut Desenho, xt: f64, xf: f64, y: f64) {
-        let queda = (xt - xf).abs() * self.declividade / 100.0;
-        d.linha(Estilo::Barbaca, vec![[xt, y], [xf, y - queda]]);
-    }
-
     /// Faixa de filtro paralela ao tardoz, do ponto `p0` (inferior) ao `p1`
     /// (superior), com espessura medida em +x (lado do maciço).
     pub fn faixa_filtro(&self, d: &mut Desenho, p0: [f64; 2], p1: [f64; 2]) {

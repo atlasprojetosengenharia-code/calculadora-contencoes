@@ -259,6 +259,36 @@ impl Projeto {
         }
     }
 
+
+    /// Muro de gravidade: alarga a crista (mantendo a base) quando há tração
+    /// nas seções do corpo. Retorna `true` se alterou a geometria.
+    pub fn alargar_crista_se_preciso(&mut self, falhas: &[String]) -> bool {
+        if self.tipo != TipoContencao::Gravidade || !falhas.iter().any(|n| n.starts_with("Tensão mín. no corpo")) {
+            return false;
+        }
+        let g = &mut self.gravidade;
+        if g.crista >= 0.8 * (self.geometria.h + self.geometria.engaste) {
+            return false;
+        }
+        // a base fica como está: a crista cresce sobre a projeção do tardoz
+        if g.proj_tardoz < 0.05 - 1e-9 {
+            return false;
+        }
+        g.crista = arred(g.crista + 0.05);
+        g.proj_tardoz = ((g.proj_tardoz - 0.05).max(0.0) / 0.05).round() * 0.05;
+        true
+    }
+
+    /// Alarga a crista até eliminar a tração no corpo (sem estabilidade global: rápido).
+    fn ajustar_crista(&mut self) {
+        for _ in 0..30 {
+            let r = self.calcular_local();
+            let f: Vec<String> = r.verificacoes.iter().filter(|v| !v.ok()).map(|v| v.nome.clone()).collect();
+            if !self.alargar_crista_se_preciso(&f) {
+                break;
+            }
+        }
+    }
     /// Aplica as proporções com a fração `k` (uso do otimizador).
     pub fn aplicar_proporcoes_pub(&mut self, k: f64) {
         self.aplicar_proporcoes(k);
@@ -282,7 +312,8 @@ impl Projeto {
         }
         let (faixa, nome): (&[f64], &str) = match self.tipo {
             TipoContencao::Gravidade | TipoContencao::Flexao => {
-                (&[0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70], "base")
+                // 40–70 % (Marchetti); muros baixos com sobrecarga podem exigir até 100 %
+                (&[0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.80, 0.90, 1.00], "base")
             }
             TipoContencao::Grampeado => (&[0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2], "comprimento dos grampos L"),
             _ => return None,
@@ -295,7 +326,7 @@ impl Projeto {
                 .iter()
                 .filter(|v| match p.tipo {
                     TipoContencao::Grampeado => !v.nome.starts_with("Face"),
-                    _ => v.nome.contains("(estático)"),
+                    _ => v.nome.contains("(estático)") || v.nome.starts_with("Tensão mín. no corpo"),
                 })
                 .collect();
             if estab.is_empty() {
@@ -305,15 +336,35 @@ impl Projeto {
         };
         for &k in faixa {
             self.aplicar_proporcoes(k);
+            self.ajustar_crista();
             if pendentes(self).is_some_and(|f| f.is_empty()) {
+                let fora = if k > 0.70 + 1e-9 { " (acima dos 70 % usuais: em muros baixos a sobrecarga pesa mais que o solo)" } else { "" };
+                let crista = if self.tipo == TipoContencao::Gravidade { format!(" ; crista {} m", crate::resultado::fmt(self.gravidade.crista)) } else { String::new() };
                 return Some(format!(
-                    "Pré-dimensionamento aplicado: {nome} = {} % de H, a menor da faixa recomendada que atende à estabilidade.",
+                    "Pré-dimensionamento aplicado: {nome} = {} % de H{fora}{crista}, a menor que atende à estabilidade.",
                     (k * 100.0).round()
                 ));
             }
         }
+        // muro de gravidade sem dente: a faixa não resolveu o deslizamento → tenta com dente de base
+        if self.tipo == TipoContencao::Gravidade && !self.gravidade.dente {
+            self.gravidade.dente = true;
+            for &k in faixa {
+                self.aplicar_proporcoes(k);
+                self.ajustar_crista();
+                if pendentes(self).is_some_and(|f| f.is_empty()) {
+                    return Some(format!(
+                        "Pré-dimensionamento aplicado: base = {} % de H com dente de base (sem dente o deslizamento não atendia) ; crista {} m.",
+                        (k * 100.0).round(),
+                        crate::resultado::fmt(self.gravidade.crista)
+                    ));
+                }
+            }
+            self.gravidade.dente = false;
+        }
         let k = *faixa.last().unwrap();
         self.aplicar_proporcoes(k);
+        self.ajustar_crista();
         let falta = pendentes(self).unwrap_or_default().join(", ");
         let dica = match self.tipo {
             TipoContencao::Grampeado => "aumente o qs, o diâmetro do furo ou reduza o espaçamento",
@@ -323,7 +374,7 @@ impl Projeto {
             _ => "ajuste a geometria manualmente",
         };
         Some(format!(
-            "Pré-dimensionamento aplicado com {nome} = {} % de H (limite da faixa recomendada). Ainda não atende: {falta} — {dica}.",
+            "Pré-dimensionamento aplicado com {nome} = {} % de H (limite da faixa). Ainda não atende: {falta} — {dica}.",
             (k * 100.0).round()
         ))
     }
@@ -723,11 +774,17 @@ impl Projeto {
         r
     }
 
-    fn drenagem_no_resultado(&self, r: &mut Resultado) {
+    /// Geometria da drenagem na seção (mesmas coordenadas do desenho e do
+    /// modelo de estabilidade global): barbacãs, filtro, dreno de pé, canaletas e DHP.
+    pub fn geo_drenagem(&self) -> GeoDrenagem {
         let dr = &self.drenagem;
-        let d = &mut r.desenho;
-        let mut larguras = Vec::new();
-        let mut altura_filtro = 0.0;
+        let mut gd = GeoDrenagem::default();
+        let tb = rad(self.geometria.beta).tan();
+        let barb = |gd: &mut GeoDrenagem, xt: f64, xf: f64, y: f64| {
+            let queda = (xt - xf).abs() * dr.declividade / 100.0;
+            gd.barbacas.push(([xt, y], [xf, y - queda]));
+            gd.larguras.push((xt - xf).abs());
+        };
         match self.tipo {
             TipoContencao::Gravidade => {
                 let m = self.preparar_gravidade();
@@ -736,60 +793,55 @@ impl Projeto {
                 for v in dr.filas(g.htot - y0) {
                     let y = y0 + v;
                     let (xl, xr) = m.faces(y);
-                    dr.barbaca(d, xr, xl, y);
-                    larguras.push(xr - xl);
+                    barb(&mut gd, xr, xl, y);
                 }
                 let yt = g.htot - 0.3;
-                dr.faixa_filtro(d, [g.x_pt, m.f], [m.faces(yt).1, yt]);
-                altura_filtro = yt - m.f;
+                gd.filtro = Some(([g.x_pt, m.f], [m.faces(yt).1, yt]));
+                gd.altura_filtro = yt - m.f;
                 if dr.canaleta_crista {
                     let x0 = g.x_cr + dr.esp_filtro + 0.30;
-                    let y = g.htot + (x0 - g.x_cr) * rad(self.geometria.beta).tan();
-                    d.canaleta(x0, y);
+                    gd.canaletas.push([x0, g.htot + (x0 - g.x_cr) * tb]);
                     if m.df > 0.0 {
-                        d.canaleta(-0.45, m.df);
+                        gd.canaletas.push([-0.45, m.df]);
                     }
                 }
             }
             TipoContencao::Flexao => {
                 let m = self.preparar_flexao();
-                let (bp, tb, tt, hs, h) = (m.b_ponta, m.t_base, m.t_topo, m.h_sapata, m.h);
-                let xr = |y: f64| bp + tb - (tb - tt) * ((y - hs) / (h - hs)).clamp(0.0, 1.0);
+                let (bp, tbs, tt, hs, h) = (m.b_ponta, m.t_base, m.t_topo, m.h_sapata, m.h);
+                let xr = |y: f64| bp + tbs - (tbs - tt) * ((y - hs) / (h - hs)).clamp(0.0, 1.0);
                 let y0 = m.df.max(hs);
                 for v in dr.filas(h - y0) {
                     let y = y0 + v;
-                    dr.barbaca(d, xr(y), bp, y);
-                    larguras.push(xr(y) - bp);
+                    barb(&mut gd, xr(y), bp, y);
                 }
                 let yt = h - 0.3;
-                dr.faixa_filtro(d, [bp + tb, hs], [xr(yt), yt]);
-                altura_filtro = yt - hs;
+                gd.filtro = Some(([bp + tbs, hs], [xr(yt), yt]));
+                gd.altura_filtro = yt - hs;
                 if dr.canaleta_crista {
                     let x0 = bp + tt + dr.esp_filtro + 0.30;
-                    d.canaleta(x0, h + (x0 - bp - tt) * rad(self.geometria.beta).tan());
+                    gd.canaletas.push([x0, h + (x0 - bp - tt) * tb]);
                     if m.df > 0.0 {
-                        d.canaleta(-0.45, m.df);
+                        gd.canaletas.push([-0.45, m.df]);
                     }
                 }
             }
             TipoContencao::Atirantada => {
                 let c = self.preparar_atirantada();
                 for v in dr.filas(c.h) {
-                    let y = -c.h + v;
-                    dr.barbaca(d, 0.0, -c.espessura, y);
-                    larguras.push(c.espessura);
+                    barb(&mut gd, 0.0, -c.espessura, -c.h + v);
                 }
-                dr.faixa_filtro(d, [0.0, -c.h], [0.0, -0.3]);
-                altura_filtro = c.h - 0.3;
+                gd.filtro = Some(([0.0, -c.h], [0.0, -0.3]));
+                gd.altura_filtro = c.h - 0.3;
                 if dr.canaleta_crista {
                     let x0 = dr.esp_filtro + 0.30;
-                    d.canaleta(x0, x0 * rad(self.geometria.beta).tan());
-                    d.canaleta(-c.espessura - 0.45, -c.h);
+                    gd.canaletas.push([x0, x0 * tb]);
+                    gd.canaletas.push([-c.espessura - 0.45, -c.h]);
                 }
                 if dr.dhp {
                     let mut y = -c.h + 0.5;
                     while y < -0.5 {
-                        d.tracejada(crate::resultado::Estilo::Barbaca, vec![[0.0, y], [dr.dhp_comprimento, y + 0.05 * dr.dhp_comprimento]]);
+                        gd.dhp.push(([0.0, y], [dr.dhp_comprimento, y + 0.05 * dr.dhp_comprimento]));
                         y += 4.0;
                     }
                 }
@@ -800,31 +852,67 @@ impl Projeto {
                 let e = g.espessura_face.max(0.02 * g.h);
                 for v in dr.filas(g.h) {
                     let xf = v * eta.tan();
-                    dr.barbaca(d, xf, xf - e, v);
-                    larguras.push(e);
+                    barb(&mut gd, xf, xf - e, v);
                 }
                 let yt = g.h - 0.3;
-                dr.faixa_filtro(d, [0.0, 0.0], [yt * eta.tan(), yt]);
-                altura_filtro = yt;
+                gd.filtro = Some(([0.0, 0.0], [yt * eta.tan(), yt]));
+                gd.altura_filtro = yt;
                 if dr.canaleta_crista {
                     let x_ft = g.h * eta.tan();
                     let x0 = x_ft + dr.esp_filtro + 0.30;
-                    d.canaleta(x0, g.h + (x0 - x_ft) * rad(self.geometria.beta).tan());
-                    d.canaleta(-e - 0.45, 0.0);
+                    gd.canaletas.push([x0, g.h + (x0 - x_ft) * tb]);
+                    gd.canaletas.push([-e - 0.45, 0.0]);
                 }
                 if dr.dhp {
                     let mut y = 0.5;
                     while y < g.h - 0.5 {
                         let xf = y * eta.tan();
-                        d.tracejada(crate::resultado::Estilo::Barbaca, vec![[xf, y], [xf + dr.dhp_comprimento, y + 0.05 * dr.dhp_comprimento]]);
+                        gd.dhp.push(([xf, y], [xf + dr.dhp_comprimento, y + 0.05 * dr.dhp_comprimento]));
                         y += 4.0;
                     }
                 }
             }
             TipoContencao::Prancha | TipoContencao::Estacas => {}
         }
-        dr.relatar(r, self.altura_contida(), &larguras, altura_filtro, self.tipo);
+        if !dr.filtro {
+            gd.filtro = None;
+        }
+        gd
     }
+
+    fn drenagem_no_resultado(&self, r: &mut Resultado) {
+        let dr = &self.drenagem;
+        let gd = self.geo_drenagem();
+        let d = &mut r.desenho;
+        for (t, f) in &gd.barbacas {
+            d.linha(crate::resultado::Estilo::Barbaca, vec![*t, *f]);
+        }
+        if let Some((p0, p1)) = gd.filtro {
+            dr.faixa_filtro(d, p0, p1);
+        }
+        for c in &gd.canaletas {
+            d.canaleta(c[0], c[1]);
+        }
+        for (a, b) in &gd.dhp {
+            d.tracejada(crate::resultado::Estilo::Barbaca, vec![*a, *b]);
+        }
+        dr.relatar(r, self.altura_contida(), &gd.larguras, gd.altura_filtro, self.tipo);
+    }
+}
+
+/// Geometria da drenagem na seção transversal.
+#[derive(Clone, Debug, Default)]
+pub struct GeoDrenagem {
+    /// Barbacãs: (ponto no tardoz, ponto na face), já com a declividade.
+    pub barbacas: Vec<([f64; 2], [f64; 2])>,
+    /// Faixa drenante junto ao tardoz: ponto inferior e superior (espessura em +x).
+    pub filtro: Option<([f64; 2], [f64; 2])>,
+    /// Canaletas: centro e cota do topo.
+    pub canaletas: Vec<[f64; 2]>,
+    /// Drenos horizontais profundos: início e fim.
+    pub dhp: Vec<([f64; 2], [f64; 2])>,
+    pub larguras: Vec<f64>,
+    pub altura_filtro: f64,
 }
 
 #[cfg(test)]
@@ -845,7 +933,7 @@ mod testes_predim {
         assert!((g.proj_frente - 0.50).abs() < 1e-9, "paramento 1:12 ≈ 0,48 → {}", g.proj_frente);
         assert!((g.ressalto_frente - 0.45).abs() < 1e-9 && (g.ressalto_tras - 0.15).abs() < 1e-9);
         let base = g.ressalto_frente + g.proj_frente + g.crista + g.proj_tardoz + g.ressalto_tras;
-        assert!(base >= 0.40 * ht - 1e-9 && base <= 0.70 * ht + 0.05, "base {base} fora de 40–70 % de {ht}");
+        assert!(base >= 0.40 * ht - 1e-9 && base <= 1.00 * ht + 0.05, "base {base} fora de 40–100 % de {ht}");
         assert!((p.geometria.engaste - 1.20).abs() < 1e-9, "embutimento = base + 30 cm");
     }
 
@@ -877,7 +965,7 @@ mod testes_predim {
         assert!((m.t_topo - 0.20).abs() < 1e-9);
         assert!(m.t_base >= 0.08 * ht && m.t_base <= 0.10 * ht + 0.05);
         assert!(m.b_ponta >= 0.10 * ht && m.b_ponta <= 0.12 * ht + 0.05);
-        assert!(b >= 0.40 * ht - 1e-9 && b <= 0.70 * ht + 0.10, "B = {b}");
+        assert!(b >= 0.40 * ht - 1e-9 && b <= 1.00 * ht + 0.10, "B = {b}");
     }
 
     #[test]

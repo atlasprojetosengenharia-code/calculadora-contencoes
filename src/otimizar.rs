@@ -126,11 +126,12 @@ pub fn custo(p: &Projeto) -> f64 {
 /// Ajuste estrutural local (sem a estabilidade global, que a geometria resolve):
 /// aumenta espessuras, placas ou o perfil até as verificações de seção atenderem.
 fn ajustar_estrutura(p: &mut Projeto) {
-    for _ in 0..12 {
+    for _ in 0..30 {
         let r = p.calcular_local();
         let f: Vec<String> = falhas(&r);
         let tem = |s: &str| f.iter().any(|n| n.contains(s));
         let mudou = match p.tipo {
+            TipoContencao::Gravidade => p.alargar_crista_se_preciso(&f),
             TipoContencao::Flexao => {
                 let h = p.geometria.h;
                 let m = &mut p.flexao;
@@ -450,6 +451,25 @@ mod diagnostico {
                     assert!(m.projeto.calcular().atende());
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod testes_muro_baixo {
+    use super::*;
+
+    /// Muros de gravidade baixos (com a sobrecarga padrão de 20 kPa) têm solução que atende.
+    #[test]
+    fn muro_de_gravidade_baixo_tem_solucao() {
+        for h in [1.0, 1.5, 2.0] {
+            let mut p = Projeto::default();
+            p.tipo = TipoContencao::Gravidade;
+            p.geometria.h = h;
+            p.pre_dimensionar();
+            let o = otimizar(&p);
+            let m = o.melhor.clone().unwrap_or_else(|| panic!("H = {h}: {}", o.mensagem(custo(&p))));
+            assert!(m.projeto.calcular().atende(), "H = {h}");
         }
     }
 }

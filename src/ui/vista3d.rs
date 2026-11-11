@@ -17,11 +17,12 @@ pub struct Camera {
     pub comprimento: f64,
     pub terreno: bool,
     pub reforcos: bool,
+    pub drenagem: bool,
 }
 
 impl Default for Camera {
     fn default() -> Self {
-        Self { azimute: -0.75, elevacao: 0.45, zoom: 1.0, comprimento: 10.0, terreno: true, reforcos: true }
+        Self { azimute: -0.75, elevacao: 0.45, zoom: 1.0, comprimento: 10.0, terreno: true, reforcos: true, drenagem: true }
     }
 }
 
@@ -69,7 +70,8 @@ fn renderizar(painter: &egui::Painter, rect: egui::Rect, m: &Modelo3d, cam: &Cam
     };
     let mut prims: Vec<Prim> = Vec::new();
     for pc in &m.pecas {
-        if (pc.classe == Classe::Terreno && !cam.terreno) || (matches!(pc.classe, Classe::Tirante | Classe::Grampo) && !cam.reforcos) {
+        if (pc.classe == Classe::Terreno && !cam.terreno) || (matches!(pc.classe, Classe::Tirante | Classe::Grampo | Classe::Placa | Classe::Cabeca) && !cam.reforcos)
+            || (matches!(pc.classe, Classe::Tubo | Classe::Filtro | Classe::Canaleta) && !cam.drenagem) {
             continue;
         }
         let tris: Vec<Tri> = pc.forma.triangulos(10);
@@ -144,6 +146,7 @@ pub fn janela(ctx: &egui::Context, aberta: &mut bool, cam: &mut Camera, proj: &P
                 ui.add(egui::DragValue::new(&mut cam.comprimento).range(2.0..=60.0).speed(0.2).suffix(" m"));
                 ui.checkbox(&mut cam.terreno, "Terreno");
                 ui.checkbox(&mut cam.reforcos, "Tirantes/grampos");
+                ui.checkbox(&mut cam.drenagem, "Drenagem");
                 ui.separator();
                 if ui.button("Frontal").clicked() {
                     (cam.azimute, cam.elevacao) = (-std::f32::consts::FRAC_PI_2, 0.05);
@@ -152,7 +155,7 @@ pub fn janela(ctx: &egui::Context, aberta: &mut bool, cam: &mut Camera, proj: &P
                     (cam.azimute, cam.elevacao) = (0.0, 0.05);
                 }
                 if ui.button("Isométrica").clicked() {
-                    *cam = Camera { comprimento: cam.comprimento, terreno: cam.terreno, reforcos: cam.reforcos, ..Camera::default() };
+                    *cam = Camera { comprimento: cam.comprimento, terreno: cam.terreno, reforcos: cam.reforcos, drenagem: cam.drenagem, ..Camera::default() };
                 }
                 ui.separator();
                 if ui.button("💾 Exportar IFC…").on_hover_text("IFC4 — abre em Revit, BIMvision, Solibri, BlenderBIM etc.").clicked() {
