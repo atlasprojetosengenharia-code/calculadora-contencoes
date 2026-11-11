@@ -253,6 +253,23 @@ impl Desenho {
 
     // ---- desenho técnico: texturas, cotas, níveis e canaletas -------------------
 
+    /// Acrescenta o conteúdo de `o` deslocado de (`dx`, `dy`).
+    pub fn anexar_deslocado(&mut self, o: &Desenho, dx: f64, dy: f64) {
+        let mv = |p: &[f64; 2]| [p[0] + dx, p[1] + dy];
+        for p in &o.poligonos {
+            self.poligonos.push(Poligono { pontos: p.pontos.iter().map(mv).collect(), estilo: p.estilo });
+        }
+        for l in &o.linhas {
+            self.linhas.push(Linha { pontos: l.pontos.iter().map(mv).collect(), estilo: l.estilo, tracejada: l.tracejada });
+        }
+        for t in &o.textos {
+            self.textos.push(Texto { pos: mv(&t.pos), texto: t.texto.clone() });
+        }
+        for (a, b) in &o.setas {
+            self.setas.push((mv(a), mv(b)));
+        }
+    }
+
     /// Hachura com retas de ângulo `ang` (graus) e espaçamento `esp` (m),
     /// recortada pelo polígono convexo `pts`.
     pub fn hachura(&mut self, pts: &[[f64; 2]], ang: f64, esp: f64) {

@@ -1,7 +1,7 @@
 //! Cortina atirantada — vários níveis de tirantes (NBR 5629 para tirantes,
 //! NBR 6118 para o painel). Cargas nos tirantes por áreas de influência.
 
-use crate::armadura::{self, Armadura};
+use crate::armadura::{self, Armadura, Forma};
 use crate::concreto::{flexao_retangular, Concreto};
 use crate::empuxo::{integrar, rad, ParamEmpuxo, Teoria};
 use crate::fatores::Fatores;
@@ -569,6 +569,7 @@ impl CortinaAtirantada {
                 as_ef,
                 unidade: "cm²/m",
                 lb_cm: armadura::lb_nec(lb, phi, as_nec, as_ef),
+                forma: Forma::Reta,
             });
         }
         let bv = e.max(0.30);

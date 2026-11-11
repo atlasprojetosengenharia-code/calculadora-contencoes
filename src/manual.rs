@@ -130,6 +130,8 @@ fn conteudo() -> Vec<B> {
         Sec("Drenagem, cargas e empuxo"),
         I("Drenagem — barbacãs (diâmetro, espaçamentos, altura da 1ª fila, declividade), filtro no tardoz, dreno de pé, \
            canaleta de crista e DHP. A condição de drenagem altera o cálculo: 'drenada' despreza a água (e exige camada            drenante + barbacãs, ou DHP); 'parcial' e 'sem drenagem' adotam uma lâmina d'água (fração de H) que entra no            empuxo hidrostático, no peso submerso do solo, na subpressão sob a base e, no solo grampeado, na poropressão do            plano de ruptura (NBR 16920-2, 12)."),
+        I("Reaterro do tardoz (muros) — tipo de solo e NSPT equivalente do material compactado, grau de compactação mínimo            (Proctor Normal) e camadas de 20 cm; o memorial traz o SPT do solo de apoio e do tardoz. Materiais da drenagem:            areia (grossa ou média), brita nº 1, 2 ou 3 e gramatura do geotêxtil."),
+        I("Dimensionamento pela tração — tirantes (barra ST 85/105 ou cordoalhas) e grampos (barra CA-50 e comprimento) são            dimensionados pela carga de cada elemento; desligue a opção para informar o aço manualmente."),
         I("Cargas adicionais — carga em faixa (Boussinesq) e ação sísmica (Mononobe-Okabe, kh e kv)."),
         I("Teoria de empuxo — Rankine ou Coulomb (com atrito solo-estrutura δ)."),
         I("Contato base-solo de fundação — atrito tan(k·φ') ou k·tg φ' (Marchetti), com predefinições ⅔φ, 0,67·tg φ \
@@ -195,6 +197,8 @@ fn conteudo() -> Vec<B> {
         Nota("Os comprimentos são aproximados: confira dobras, ganchos, cobrimentos e emendas no projeto executivo \
               antes de liberar a armação para corte e dobra."),
 
+        I("Estabilidade global — verificação por Bishop simplificado (superfícies circulares) com o FS mínimo da Tabela 3 da            NBR 11682, incluindo reaterro, água e a tração dos tirantes e grampos; o arco crítico aparece na seção."),
+        I("Detalhes construtivos e barras de aço isoladas — ao lado da seção: barbacã, canaleta, cabeça e seção do grampo,            tirante e cabeça de ancoragem; e cada posição de armação com dobras, ganchos e pinos (NBR 6118, Tabelas 9.1 e 9.2)."),
         Cap("8. Exportações"),
         I("📐 Exportar DXF (AutoCAD) — seção, armaduras, tabela de armação, notas e carimbo em DXF R12 (metros), uma \
            camada por elemento. No AutoCAD, abra o arquivo e use “Salvar como” para gerar o .dwg."),

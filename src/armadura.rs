@@ -10,9 +10,58 @@ pub fn area_barra_cm2(phi_mm: f64) -> f64 {
     std::f64::consts::PI * phi_mm * phi_mm / 400.0
 }
 
+/// Forma da barra, para o desenho das posições isoladas (medidas em m).
+#[derive(Clone, Debug, PartialEq, Default)]
+pub enum Forma {
+    /// Barra reta.
+    #[default]
+    Reta,
+    /// Dobra a 90° numa ponta: perna longa e perna curta.
+    EmL { longa: f64, curta: f64 },
+    /// Dobras a 90° nas duas pontas: vão e pernas.
+    EmU { vao: f64, perna: f64 },
+    /// Estribo retangular fechado (b × h, medidas externas) com ganchos a 135°.
+    Estribo { b: f64, h: f64 },
+    /// Hélice circular (diâmetro médio e passo).
+    Helice { d: f64, passo: f64 },
+    /// Tela soldada ou malha (painel).
+    Tela,
+}
+
+/// Diâmetro mínimo do pino de dobramento (mm) — NBR 6118:2023, Tabela 9.1 (barras) e
+/// Tabela 9.2 (estribos), aço CA-50.
+pub fn pino_mm(phi_mm: f64, estribo: bool) -> f64 {
+    let n = if estribo {
+        if phi_mm <= 10.0 {
+            3.0
+        } else if phi_mm < 20.0 {
+            5.0
+        } else {
+            8.0
+        }
+    } else if phi_mm < 20.0 {
+        5.0
+    } else {
+        8.0
+    };
+    n * phi_mm
+}
+
+/// Ponta reta do gancho a 135° de estribo: 5Øt, mínimo 5 cm (NBR 6118:2023, 9.4.6.1), em cm.
+pub fn gancho_estribo_cm(phi_mm: f64) -> f64 {
+    (5.0 * phi_mm / 10.0).max(5.0)
+}
+
+/// Ponta reta do gancho em ângulo reto de barra longitudinal: 8Ø (NBR 6118:2023, 9.4.2.3 c), em cm.
+pub fn gancho_reto_cm(phi_mm: f64) -> f64 {
+    8.0 * phi_mm / 10.0
+}
+
 /// Linha da tabela de armação.
 #[derive(Clone, Debug)]
 pub struct Armadura {
+    /// Forma para o desenho das posições.
+    pub forma: Forma,
     /// Posição (N1, N2 …).
     pub pos: String,
     pub elemento: String,
@@ -150,6 +199,7 @@ pub fn viga_construtiva(p1: &str, p2: &str, elemento: &str, b: f64, h: f64, fck:
             as_ef: n as f64 * ab,
             unidade: "cm²",
             lb_cm: lb,
+            forma: Forma::Reta,
         },
         Armadura {
             pos: p2.into(),
@@ -162,6 +212,7 @@ pub fn viga_construtiva(p1: &str, p2: &str, elemento: &str, b: f64, h: f64, fck:
             as_ef: 2.0 * area_barra_cm2(6.3) * 100.0 / 15.0,
             unidade: "cm²/m",
             lb_cm: 0.0,
+            forma: Forma::Estribo { b, h },
         },
     ]
 }

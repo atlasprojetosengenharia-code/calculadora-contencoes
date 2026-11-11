@@ -4,6 +4,7 @@
 mod alvenaria;
 mod app;
 mod armadura;
+mod barras;
 mod atualizacao;
 mod concreto;
 mod desenho;

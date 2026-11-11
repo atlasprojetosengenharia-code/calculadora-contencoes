@@ -18,7 +18,7 @@
 //! H = altura do corpo (acima da base). Base = A + B + C + D + E.
 
 use crate::alvenaria::{self, ClasseArgamassa, Propriedades};
-use crate::armadura::{self, Armadura};
+use crate::armadura::{self, Armadura, Forma};
 use crate::empuxo::{integrar, rad, ParamEmpuxo, Teoria};
 use crate::estabilidade::{analisar, centroide, Forca, LimitesFs};
 use crate::fatores::Fatores;
@@ -759,6 +759,7 @@ impl MuroGravidade {
                     as_ef,
                     unidade: "cm²",
                     lb_cm: lb,
+                    forma: Forma::Reta,
                 });
                 r.armaduras.push(Armadura {
                     pos: "N2".into(),
@@ -771,6 +772,7 @@ impl MuroGravidade {
                     as_ef: armadura::area_barra_cm2(6.3) * 2.0 * 5.0,
                     unidade: "cm²/m",
                     lb_cm: 0.0,
+                    forma: Forma::Estribo { b: bc, h: hc },
                 });
                 r.linha(format!(
                     "Coroamento: viga {} × {} m em concreto armado C25, 4 Ø10 (N1) e estribos Ø6,3 c/20 (N2), interrompida nas juntas.",

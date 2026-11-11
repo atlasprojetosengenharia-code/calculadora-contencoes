@@ -968,7 +968,7 @@ mod testes_predim {
                             assert!(!ruim, "{} H={h} β={beta}: coordenada não finita no desenho", tipo.nome());
                             // o memorial em Word sempre pode ser gerado
                             if (h - 5.0).abs() < 1e-9 && q == 20.0 && beta == 20.0 {
-                                let bytes = crate::docx::gerar(&r, "teste", "0", &r.desenho);
+                                let bytes = crate::docx::gerar(&r, "teste", "0", &[("Seção".to_string(), r.desenho.clone())]);
                                 assert!(bytes.len() > 2000);
                             }
                         }
@@ -1109,7 +1109,8 @@ mod testes_predim {
             p.pre_dimensionar();
             let r = p.calcular();
             let mut d = r.desenho.clone();
-            crate::detalhes::anexar(&mut d, &p.drenagem, tipo);
+            crate::detalhes::anexar(&mut d, &p, &r);
+            crate::barras::anexar(&mut d, &r.armaduras);
             let dxf = crate::dxf::gerar(&d, &r.armaduras, tipo.arquivo(), &[], "teste");
             std::fs::write(format!("{pasta}/{}.dxf", tipo.arquivo()), dxf).unwrap();
         }

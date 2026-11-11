@@ -1,7 +1,7 @@
 //! Muro de flexão em concreto armado (perfil L / T invertido).
 
 use super::gravidade::{empuxo_no_plano, formula_empuxo, passivo_com_dente, passivo_frontal, subpressao};
-use crate::armadura::{self, Armadura};
+use crate::armadura::{self, Armadura, Forma};
 use crate::concreto::{flexao_retangular, vrd1, Concreto, Flexao};
 use crate::empuxo::{integrar, rad, ParamEmpuxo, Teoria};
 use crate::estabilidade::{analisar, centroide, Forca, LimitesFs};
@@ -337,6 +337,7 @@ impl MuroFlexao {
                 as_ef,
                 unidade: "cm²/m",
                 lb_cm: armadura::lb_nec(lbb, phi, as_nec, as_ef),
+                forma: Forma::Reta,
             };
             tab.push(a.clone());
             a
@@ -376,6 +377,19 @@ impl MuroFlexao {
             ..n1.clone()
         });
 
+        // formas para o desenho das posições isoladas (coerentes com o esquema da seção)
+        {
+            let b_tot = self.b_ponta + self.t_base + self.b_talao;
+            let perna = (self.h_sapata - 2.0 * cob - 0.05).max(0.15);
+            for a in tab.iter_mut() {
+                match a.pos.as_str() {
+                    "N4" => a.forma = Forma::EmL { longa: (a.comprimento_m - perna).max(0.3), curta: perna },
+                    "N5" => a.forma = Forma::EmU { vao: (b_tot - 2.0 * cob).max(0.3), perna },
+                    "N7" => a.forma = Forma::EmL { longa: (self.h_sapata - cob) + l0t / 100.0, curta: n1.lb_cm / 100.0 },
+                    _ => {}
+                }
+            }
+        }
         r.formula(
             "Ancoragem e traspasse (CA-50 nervurado)",
             "lb = (Ø/4)·(fyd/fbd) ≥ 25Ø ;  fbd = 2,25·η2·fctd ;  lb,nec = lb·As,calc/As,ef ;  l0t = 2,0·lb,nec",

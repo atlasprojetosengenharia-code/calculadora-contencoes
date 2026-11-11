@@ -1,7 +1,7 @@
 //! Solo grampeado (NBR 16920-2): estabilidade por cunhas planas passando
 //! pelo pé da escavação, arrancamento e ruptura das barras, e face.
 
-use crate::armadura::{self, Armadura};
+use crate::armadura::{self, Armadura, Forma};
 use crate::concreto::{flexao_retangular, Concreto};
 use crate::empuxo::{rad, ParamEmpuxo};
 use crate::fatores::Fatores;
@@ -474,6 +474,7 @@ impl SoloGrampeado {
             as_ef: self.area_barra_mm2() / 100.0,
             unidade: "cm²",
             lb_cm: 0.0,
+            forma: Forma::Reta,
         }];
         let e = self.espessura_face;
         if as_face > 0.0 {
@@ -490,6 +491,7 @@ impl SoloGrampeado {
                         as_ef: as_t,
                         unidade: "cm²/m",
                         lb_cm: 0.0,
+                        forma: Forma::Tela,
                     });
                     r.formula(
                         "Tela soldada do paramento",
@@ -511,6 +513,7 @@ impl SoloGrampeado {
                         as_ef,
                         unidade: "cm²/m",
                         lb_cm: armadura::lb_basico(phi, c.fck, c.fyk, 1.4, 1.15, true),
+                        forma: Forma::Tela,
                     });
                     r.aviso("Paramento: nenhuma tela Q padronizada atende — adotada malha de barras.");
                 }

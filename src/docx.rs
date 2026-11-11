@@ -255,15 +255,15 @@ fn tabela_armacao(res: &Resultado) -> String {
     tabela(&larg, &linhas)
 }
 
-fn figura(cx_cm: f64, proporcao: f64) -> String {
+fn figura(n: usize, descr: &str, cx_cm: f64, proporcao: f64) -> String {
     let cx = (cx_cm * 360_000.0) as i64;
     let cy = (cx as f64 * proporcao) as i64;
     format!(
-        r#"<w:p><w:pPr><w:keepNext/><w:jc w:val="center"/></w:pPr><w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="{cx}" cy="{cy}"/><wp:docPr id="1" name="Seção transversal" descr="Seção transversal da contenção"/><wp:cNvGraphicFramePr><a:graphicFrameLocks xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" noChangeAspect="1"/></wp:cNvGraphicFramePr><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="0" name="secao.png"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rIdImg"><a:extLst><a:ext uri="{{96DAC541-7B7A-43D3-8B79-37D633B846F1}}"><asvg:svgBlip xmlns:asvg="http://schemas.microsoft.com/office/drawing/2016/SVG/main" r:embed="rIdSvg"/></a:ext></a:extLst></a:blip><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"#
+        r#"<w:p><w:pPr><w:keepNext/><w:jc w:val="center"/></w:pPr><w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="{cx}" cy="{cy}"/><wp:docPr id="{n}" name="Figura {n}" descr="{descr}"/><wp:cNvGraphicFramePr><a:graphicFrameLocks xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" noChangeAspect="1"/></wp:cNvGraphicFramePr><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="0" name="fig{n}.png"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rIdImg{n}"><a:extLst><a:ext uri="{{96DAC541-7B7A-43D3-8B79-37D633B846F1}}"><asvg:svgBlip xmlns:asvg="http://schemas.microsoft.com/office/drawing/2016/SVG/main" r:embed="rIdSvg{n}"/></a:ext></a:extLst></a:blip><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"#
     )
 }
 
-fn corpo(res: &Resultado, titulo_memorial: &str, versao: &str) -> String {
+fn corpo(res: &Resultado, titulo_memorial: &str, versao: &str, figs: &[(String, f64)]) -> String {
     let mut x = String::new();
     x += &par(&run("MEMORIAL DE CÁLCULO", &Fmt { negrito: true, cor: Some("57606A"), tam: Some(20), ..Default::default() }), None, None);
     x += &par(&run(titulo_memorial, &Fmt::default()), Some("Title"), None);
@@ -278,9 +278,16 @@ fn corpo(res: &Resultado, titulo_memorial: &str, versao: &str) -> String {
         &[linha(&[celula(&par(&run(msg, &Fmt { negrito: true, cor: Some(cor), ..Default::default() }), None, Some("center")), LARGURA, Some(fundo), 1)], false)],
     );
 
-    x += &titulo("Seção transversal", 1);
-    x += &figura(16.0, 0.625);
-    x += &par(&run("Esquema sem escala de impressão; medidas em centímetros (cotas) e metros (demais legendas).", &Fmt { italico: true, cor: Some("57606A"), tam: Some(16), ..Default::default() }), None, Some("center"));
+    for (i, (t, prop)) in figs.iter().enumerate() {
+        x += &titulo(t, 1);
+        x += &figura(i + 1, t, 16.0, *prop);
+        let legenda = if i == 0 {
+            "Esquema sem escala de impressão; medidas em centímetros (cotas) e metros (demais legendas)."
+        } else {
+            "Detalhes sem escala; medidas em centímetros, salvo indicação."
+        };
+        x += &par(&run(legenda, &Fmt { italico: true, cor: Some("57606A"), tam: Some(16), ..Default::default() }), None, Some("center"));
+    }
 
     let mut pend: Vec<&Verificacao> = Vec::new();
     for b in &res.blocos {
@@ -351,15 +358,21 @@ const ESTILOS: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 
 const NS: &str = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing""#;
 
-/// Gera o memorial em .docx. `desenho` é a seção transversal do resultado.
-pub fn gerar(res: &Resultado, titulo_memorial: &str, versao: &str, desenho: &crate::resultado::Desenho) -> Vec<u8> {
-    let (lp, ap) = (1600usize, 1000usize);
-    let png = crate::raster::desenho_png(desenho, lp, ap);
-    let svg = crate::desenho::svg(desenho, 1600.0, 1000.0);
+/// Gera o memorial em .docx. `figuras` = (título, desenho): a primeira é a seção transversal;
+/// as demais (detalhes construtivos, posições de armação) são opcionais.
+pub fn gerar(res: &Resultado, titulo_memorial: &str, versao: &str, figuras: &[(String, crate::resultado::Desenho)]) -> Vec<u8> {
+    let lp = 1600usize;
+    let mut imagens: Vec<(Vec<u8>, String)> = Vec::new();
+    let mut proporcoes: Vec<(String, f64)> = Vec::new();
+    for (t, d) in figuras {
+        let ap = crate::raster::altura_para(d, lp);
+        imagens.push((crate::raster::desenho_png(d, lp, ap), crate::desenho::svg(d, lp as f64, ap as f64)));
+        proporcoes.push((t.clone(), ap as f64 / lp as f64));
+    }
     let doc = format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document {NS}><w:body>{}<w:sectPr><w:headerReference w:type="default" r:id="rIdH"/><w:footerReference w:type="default" r:id="rIdF"/><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1985" w:right="1134" w:bottom="1418" w:left="1418" w:header="709" w:footer="567" w:gutter="0"/></w:sectPr></w:body></w:document>"#,
-        corpo(res, titulo_memorial, versao)
+        corpo(res, titulo_memorial, versao, &proporcoes)
     );
     let cabecalho = format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:hdr {NS}><w:p><w:pPr><w:pStyle w:val="Header"/></w:pPr></w:p></w:hdr>"#);
     let rodape = format!(
@@ -370,8 +383,16 @@ pub fn gerar(res: &Resultado, titulo_memorial: &str, versao: &str, desenho: &cra
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Default Extension="svg" ContentType="image/svg+xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/><Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/></Types>"#;
     let rels = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/></Relationships>"#;
-    let rels_doc = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdS" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/><Relationship Id="rIdH" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/><Relationship Id="rIdF" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/><Relationship Id="rIdImg" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/secao.png"/><Relationship Id="rIdSvg" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/secao.svg"/></Relationships>"#;
+    let mut rels_doc = String::from(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdS" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/><Relationship Id="rIdH" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/><Relationship Id="rIdF" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>"#,
+    );
+    for n in 1..=imagens.len() {
+        rels_doc += &format!(
+            r#"<Relationship Id="rIdImg{n}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/fig{n}.png"/><Relationship Id="rIdSvg{n}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/fig{n}.svg"/>"#
+        );
+    }
+    rels_doc += "</Relationships>";
     let nucleo = format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:title>{}</dc:title><dc:creator>{}</dc:creator></cp:coreProperties>"#,
@@ -388,8 +409,10 @@ pub fn gerar(res: &Resultado, titulo_memorial: &str, versao: &str, desenho: &cra
     z.adicionar("word/header1.xml", cabecalho.as_bytes());
     z.adicionar("word/footer1.xml", rodape.as_bytes());
     z.adicionar("word/_rels/document.xml.rels", rels_doc.as_bytes());
-    z.adicionar("word/media/secao.png", &png);
-    z.adicionar("word/media/secao.svg", svg.as_bytes());
+    for (n, (png, svg)) in imagens.iter().enumerate() {
+        z.adicionar(&format!("word/media/fig{}.png", n + 1), png);
+        z.adicionar(&format!("word/media/fig{}.svg", n + 1), svg.as_bytes());
+    }
     z.fechar()
 }
 
@@ -401,11 +424,12 @@ mod testes {
     fn pacote_docx_tem_as_partes_e_o_conteudo() {
         let p = crate::projeto::Projeto::default();
         let r = p.calcular();
-        let bytes = gerar(&r, "Muro de gravidade — teste & <ok>", "0.0.0", &r.desenho);
+        let figs = vec![("Seção transversal".to_string(), r.desenho.clone()), ("Barras".to_string(), crate::barras::montar(&r.armaduras, 1.0, 2))];
+        let bytes = gerar(&r, "Muro de gravidade — teste & <ok>", "0.0.0", &figs);
         // assinatura ZIP e fim do diretório central
         assert_eq!(&bytes[..4], b"PK\x03\x04");
         assert!(bytes.windows(4).any(|w| w == b"PK\x05\x06"));
-        for parte in ["[Content_Types].xml", "word/document.xml", "word/styles.xml", "word/header1.xml", "word/media/secao.png"] {
+        for parte in ["[Content_Types].xml", "word/document.xml", "word/styles.xml", "word/header1.xml", "word/media/fig1.png", "word/media/fig2.svg"] {
             assert!(bytes.windows(parte.len()).any(|w| w == parte.as_bytes()), "falta {parte}");
         }
         let amostra = std::env::var("DOCX_AMOSTRA");

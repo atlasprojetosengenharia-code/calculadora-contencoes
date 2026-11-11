@@ -2,7 +2,7 @@
 //! Parede em balanço (Blum simplificado) ou com uma linha de apoio
 //! (suporte livre — free earth support). Cálculo por metro de parede.
 
-use crate::armadura::{self, Armadura};
+use crate::armadura::{self, Armadura, Forma};
 use crate::concreto::{as_circular, Concreto};
 use crate::empuxo::{integrar, rad, ParamEmpuxo, Teoria};
 use crate::fatores::Fatores;
@@ -647,6 +647,7 @@ impl ParedeEstacas {
                 as_ef: n as f64 * ab,
                 unidade: "cm²",
                 lb_cm: lb,
+                forma: Forma::Reta,
             });
             let espiras = l_total / (passo_cm / 100.0);
             tab.push(Armadura {
@@ -660,6 +661,7 @@ impl ParedeEstacas {
                 as_ef: armadura::area_barra_cm2(phi_t) * 100.0 / passo_cm,
                 unidade: "cm²/m",
                 lb_cm: 0.0,
+                forma: Forma::Helice { d: dm - 2.0 * cob, passo: passo_cm / 100.0 },
             });
         }
         let bv = (dm + 0.20).max(0.40);

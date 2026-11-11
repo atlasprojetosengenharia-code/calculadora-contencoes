@@ -296,6 +296,25 @@ fn rgb(c: eframe::egui::Color32) -> ([u8; 3], f32) {
     ([(c.r() as f32 * f).min(255.0) as u8, (c.g() as f32 * f).min(255.0) as u8, (c.b() as f32 * f).min(255.0) as u8], a)
 }
 
+/// Altura (px) de uma imagem de largura `w` que acomoda o desenho com a sua proporção.
+pub fn altura_para(d: &Desenho, w: usize) -> usize {
+    let mut pts: Vec<[f64; 2]> = d.poligonos.iter().flat_map(|p| p.pontos.iter().copied()).collect();
+    pts.extend(d.linhas.iter().flat_map(|l| l.pontos.iter().copied()));
+    pts.extend(d.textos.iter().map(|t| t.pos));
+    let (mut x0, mut x1, mut y0, mut y1) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
+    for p in pts.iter().filter(|p| p[0].is_finite() && p[1].is_finite()) {
+        x0 = x0.min(p[0]);
+        x1 = x1.max(p[0]);
+        y0 = y0.min(p[1]);
+        y1 = y1.max(p[1]);
+    }
+    if !(x1 > x0 && y1 > y0) {
+        return w * 5 / 8;
+    }
+    let esc = (w as f64 - 80.0) / (x1 - x0);
+    (((y1 - y0) * esc + 80.0) as usize).clamp(w / 4, w * 3 / 2)
+}
+
 /// Seção transversal (tema claro) como PNG.
 pub fn desenho_png(d: &Desenho, w: usize, h: usize) -> Vec<u8> {
     let mut img = Imagem::nova(w, h, [255, 255, 255]);

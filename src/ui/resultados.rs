@@ -37,7 +37,8 @@ pub fn mostrar(ui: &mut egui::Ui, proj: &Projeto, res: &Resultado) -> Option<Str
                 {
                     // detalhes da drenagem (barbacã e canaleta) ao lado da seção
                     let mut desenho_dxf = res.desenho.clone();
-                    crate::detalhes::anexar(&mut desenho_dxf, &proj.drenagem, proj.tipo);
+                    crate::detalhes::anexar(&mut desenho_dxf, proj, res);
+                    crate::barras::anexar(&mut desenho_dxf, &res.armaduras);
                     let dxf = crate::dxf::gerar(
                         &desenho_dxf,
                         &res.armaduras,
@@ -82,7 +83,14 @@ pub fn mostrar(ui: &mut egui::Ui, proj: &Projeto, res: &Resultado) -> Option<Str
                     .add_filter("Documento do Word", &["docx"])
                     .save_file()
                 {
-                    let docx = crate::docx::gerar(res, &titulo_memorial, &crate::sobre::versao_completa(), &res.desenho);
+                    let mut figuras = vec![("Seção transversal".to_string(), res.desenho.clone())];
+                    if crate::detalhes::existem(proj) {
+                        figuras.push(("Detalhes construtivos".to_string(), crate::detalhes::montar(proj, res, 1.0, 2)));
+                    }
+                    if !res.armaduras.is_empty() {
+                        figuras.push(("Posições de armação isoladas (dobras e ganchos — NBR 6118)".to_string(), crate::barras::montar(&res.armaduras, 1.0, 2)));
+                    }
+                    let docx = crate::docx::gerar(res, &titulo_memorial, &crate::sobre::versao_completa(), &figuras);
                     msg = Some(match std::fs::write(&arq, docx) {
                         Ok(_) => {
                             let _ = std::process::Command::new("explorer").arg(&arq).spawn();
@@ -111,11 +119,47 @@ pub fn mostrar(ui: &mut egui::Ui, proj: &Projeto, res: &Resultado) -> Option<Str
                 lista_verificacoes(ui, res);
             });
         });
+        if crate::detalhes::existem(proj) {
+            ui.add_space(10.0);
+            cartao(ui, |ui| {
+                titulo(ui, "Detalhes construtivos (sem escala)");
+                let n = crate::detalhes::quantidade(proj);
+                for par in 0..n.div_ceil(2) {
+                    ui.columns(2, |c| {
+                        for (j, col) in c.iter_mut().enumerate() {
+                            let i = 2 * par + j;
+                            if i < n {
+                                desenho::pintar(col, &crate::detalhes::montar_um(proj, res, i), 300.0);
+                            }
+                        }
+                    });
+                    ui.add_space(6.0);
+                }
+            });
+        }
         if !res.armaduras.is_empty() {
             ui.add_space(10.0);
             cartao(ui, |ui| {
                 titulo(ui, "Detalhamento do aço — tabela de armação");
                 super::memorial::tabela_armacao(ui, &res.armaduras);
+            });
+        }
+        if !res.armaduras.is_empty() {
+            ui.add_space(10.0);
+            cartao(ui, |ui| {
+                titulo(ui, "Barras de aço — posições isoladas (dobras e ganchos, NBR 6118)");
+                let n = res.armaduras.len();
+                for par in 0..n.div_ceil(2) {
+                    ui.columns(2, |c| {
+                        for (j, col) in c.iter_mut().enumerate() {
+                            let i = 2 * par + j;
+                            if i < n {
+                                desenho::pintar(col, &crate::barras::montar_uma(&res.armaduras, i), 250.0);
+                            }
+                        }
+                    });
+                    ui.add_space(6.0);
+                }
             });
         }
         if !res.avisos.is_empty() {

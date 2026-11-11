@@ -363,6 +363,7 @@ pub fn gerar(d: &Desenho, armaduras: &[Armadura], titulo: &str, notas: &[String]
 #[cfg(test)]
 mod testes {
     use super::*;
+    use crate::armadura::Forma;
 
     #[test]
     fn dxf_r12_valido() {
@@ -384,6 +385,7 @@ mod testes {
             as_ef: 8.18,
             unidade: "cm²/m",
             lb_cm: 40.0,
+            forma: Forma::Reta,
         };
         let b = gerar(&d, &[a], "Teste", &["nota".into()], "0.3.0");
         // Windows-1252: "ç" (0xE7) como byte; Ø vira %%c (código do AutoCAD); φ vira escape U+
