@@ -8,7 +8,7 @@ use crate::resultado::{Desenho, Estilo};
 pub struct Imagem {
     pub w: usize,
     pub h: usize,
-    px: Vec<u8>,
+    pub(crate) px: Vec<u8>,
 }
 
 /// Fonte 5×7 clássica (ASCII 32–126), uma coluna por byte, bit 0 = topo.

@@ -75,27 +75,6 @@ impl Material {
         };
         (c, 0.0)
     }
-
-    /// Intensidade da variação de tom (textura) na renderização.
-    pub fn textura(&self) -> f64 {
-        match self {
-            Material::Brita | Material::Gabiao => 0.30,
-            Material::Pedra => 0.22,
-            Material::SoloArgila | Material::SoloAreia | Material::SoloSilte | Material::SoloAterro | Material::Reaterro | Material::Areia => 0.10,
-            Material::Concreto | Material::Bulbo => 0.04,
-            _ => 0.0,
-        }
-    }
-
-    /// Tamanho do grão da textura (m).
-    pub fn grao(&self) -> f64 {
-        match self {
-            Material::Brita => 0.05,
-            Material::Gabiao | Material::Pedra => 0.18,
-            Material::Areia => 0.04,
-            _ => 0.25,
-        }
-    }
 }
 
 /// Classe IFC do elemento.

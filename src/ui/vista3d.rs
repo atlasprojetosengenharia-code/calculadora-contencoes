@@ -3,6 +3,7 @@
 //! zoom, vistas prontas e exportação IFC.
 
 use super::tema;
+use super::texturas::{Tex, TODAS};
 use crate::modelo3d::{Classe, Material, Modelo3d, Tri};
 use crate::projeto::Projeto;
 use crate::resultado::{fmt, Resultado};
@@ -30,6 +31,8 @@ impl Default for Camera {
 
 struct Prim {
     pts: [Pos2; 3],
+    uv: [Pos2; 3],
+    tex: Option<usize>,
     prof: f32,
     cor: Color32,
 }
@@ -57,18 +60,36 @@ fn subdividir(t: Tri, s: f64, prof: u32, saida: &mut Vec<Tri>) {
     subdividir([m, b, c], s, prof - 1, saida);
 }
 
-/// Ruído determinístico em [−1, 1] para a célula da textura.
-fn ruido(p: [f64; 3], grao: f64) -> f32 {
-    let k = |v: f64| (v / grao).floor() as i64;
-    let mut h = (k(p[0]).wrapping_mul(73_856_093) ^ k(p[1]).wrapping_mul(19_349_663) ^ k(p[2]).wrapping_mul(83_492_791)) as u64;
-    h ^= h >> 13;
-    h = h.wrapping_mul(0x5bd1_e995);
-    h ^= h >> 15;
-    ((h % 2001) as f32 / 1000.0) - 1.0
+/// Textura e tamanho do ladrilho (m) de cada material; `None` = cor lisa
+/// (aço, PVC, cordoalha: modelagem sem textura).
+fn textura_de(m: Material, normal: [f64; 3]) -> Option<(Tex, f64, [f32; 3])> {
+    let branco = [1.0, 1.0, 1.0];
+    Some(match m {
+        Material::Concreto => (Tex::Concreto, 1.6, branco),
+        Material::Bulbo => (Tex::Concreto, 0.8, [0.95, 0.95, 0.92]),
+        Material::Pedra => (Tex::Pedra, 1.4, branco),
+        Material::Gabiao => (Tex::Gabiao, 1.0, branco),
+        // bolsa de brita envolta em manta: manta por fora, brita nas faces cortadas
+        Material::Brita => {
+            if normal[2].abs() > 0.9 {
+                (Tex::Brita, 0.45, branco)
+            } else {
+                (Tex::Geotextil, 0.6, branco)
+            }
+        }
+        Material::Areia => (Tex::Areia, 0.8, branco),
+        Material::Geocomposto => (Tex::Geotextil, 0.6, [0.25, 0.25, 0.27]),
+        Material::SoloArgila => (Tex::Argila, 2.2, branco),
+        Material::SoloAreia => (Tex::Areia, 1.6, branco),
+        Material::SoloSilte => (Tex::Silte, 2.0, branco),
+        Material::SoloAterro => (Tex::SoloEscuro, 1.6, branco),
+        Material::Reaterro => (Tex::SoloEscuro, 1.6, [1.12, 1.05, 1.0]),
+        _ => return None,
+    })
 }
 
 /// Desenha o modelo na área `rect`.
-fn renderizar(painter: &egui::Painter, rect: egui::Rect, m: &Modelo3d, cam: &Camera, escuro: bool) {
+fn renderizar(painter: &egui::Painter, rect: egui::Rect, m: &Modelo3d, cam: &Camera, escuro: bool, tex: &[egui::TextureHandle]) {
     let (a, b) = m.caixa();
     let centro = [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0, (a[2] + b[2]) / 2.0];
     let raio = (((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2) + (b[2] - a[2]).powi(2)).sqrt() / 2.0).max(0.5) as f32;
@@ -76,7 +97,6 @@ fn renderizar(painter: &egui::Painter, rect: egui::Rect, m: &Modelo3d, cam: &Cam
     let (se, ce) = cam.elevacao.sin_cos();
     let dist = 3.2 * raio;
     let foco = 0.5 * rect.width().min(rect.height()) * 2.6 * cam.zoom;
-    // espaço da câmera: rotação em torno do eixo vertical (y) e depois do horizontal
     let cam_pt = |v: [f64; 3]| -> [f32; 3] {
         let (x, y, z) = ((v[0] - centro[0]) as f32, (v[1] - centro[1]) as f32, (v[2] - centro[2]) as f32);
         let x1 = ca * x + sa * z;
@@ -89,23 +109,23 @@ fn renderizar(painter: &egui::Painter, rect: egui::Rect, m: &Modelo3d, cam: &Cam
         let d = (dist - c[2]).max(0.05 * raio);
         rect.center() + egui::vec2(foco * c[0] / d, -foco * c[1] / d)
     };
-    // luz difusa vinda do observador, de cima e da esquerda
+    // luz fixa no mundo (de cima, à esquerda e da frente) + luz ambiente
     let luz = {
-        let l = [-0.35f32, 0.6, 0.72];
+        let l = [-0.45f64, 0.80, -0.40];
         let n = (l[0] * l[0] + l[1] * l[1] + l[2] * l[2]).sqrt();
         [l[0] / n, l[1] / n, l[2] / n]
     };
-    // tamanho máximo dos triângulos (ordem do pintor estável e textura visível)
-    let passo = (raio as f64 / 14.0).clamp(0.15, 1.5);
+    let passo = (raio as f64 / 16.0).clamp(0.12, 1.2);
     let mut prims: Vec<Prim> = Vec::new();
     for pc in &m.pecas {
-        if (pc.classe == Classe::Terreno && !cam.terreno) || (matches!(pc.classe, Classe::Tirante | Classe::Grampo | Classe::Placa | Classe::Cabeca) && !cam.reforcos)
-            || (matches!(pc.classe, Classe::Tubo | Classe::Filtro | Classe::Canaleta) && !cam.drenagem) {
+        if (pc.classe == Classe::Terreno && !cam.terreno)
+            || (matches!(pc.classe, Classe::Tirante | Classe::Grampo | Classe::Placa | Classe::Cabeca) && !cam.reforcos)
+            || (matches!(pc.classe, Classe::Tubo | Classe::Filtro | Classe::Canaleta) && !cam.drenagem)
+        {
             continue;
         }
-        let (tex, grao) = (pc.material.textura() as f32, pc.material.grao());
         let mut tris: Vec<Tri> = Vec::new();
-        for t in pc.forma.triangulos(10) {
+        for t in pc.forma.triangulos(12) {
             subdividir(t, passo, 12, &mut tris);
         }
         for t in tris {
@@ -113,31 +133,54 @@ fn renderizar(painter: &egui::Painter, rect: egui::Rect, m: &Modelo3d, cam: &Cam
             if c.iter().any(|q| dist - q[2] <= 0.05 * raio) {
                 continue;
             }
-            let u = [c[1][0] - c[0][0], c[1][1] - c[0][1], c[1][2] - c[0][2]];
-            let w = [c[2][0] - c[0][0], c[2][1] - c[0][1], c[2][2] - c[0][2]];
+            // normal no mundo (para luz e projeção da textura)
+            let u = [t[1][0] - t[0][0], t[1][1] - t[0][1], t[1][2] - t[0][2]];
+            let w = [t[2][0] - t[0][0], t[2][1] - t[0][1], t[2][2] - t[0][2]];
             let n = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]];
             let nl = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
-            if nl < 1e-12 {
+            if nl < 1e-14 {
                 continue;
             }
-            let difusa = ((n[0] * luz[0] + n[1] * luz[1] + n[2] * luz[2]) / nl).abs();
-            prims.push(Prim {
-                pts: [proj(c[0]), proj(c[1]), proj(c[2])],
-                prof: (c[0][2] + c[1][2] + c[2][2]) / 3.0,
-                cor: {
-                    let cm = [(t[0][0] + t[1][0] + t[2][0]) / 3.0, (t[0][1] + t[1][1] + t[2][1]) / 3.0, (t[0][2] + t[1][2] + t[2][2]) / 3.0];
-                    cor_material(pc.material, (0.40 + 0.60 * difusa) * (1.0 + tex * ruido(cm, grao)), escuro)
-                },
-            });
+            let n = [n[0] / nl, n[1] / nl, n[2] / nl];
+            let difusa = (n[0] * luz[0] + n[1] * luz[1] + n[2] * luz[2]).abs() as f32;
+            let k = 0.45 + 0.60 * difusa;
+            let (tex_i, uv, tinta) = match textura_de(pc.material, n) {
+                Some((tx, esc, tinta)) => {
+                    // projeção na face dominante (mapeamento planar por eixo)
+                    let (ax, ay, az) = (n[0].abs(), n[1].abs(), n[2].abs());
+                    let par = |p: [f64; 3]| -> Pos2 {
+                        let (s, r) = if ax >= ay && ax >= az { (p[2], p[1]) } else if ay >= az { (p[0], p[2]) } else { (p[0], p[1]) };
+                        Pos2::new((s / esc) as f32, (-r / esc) as f32)
+                    };
+                    (TODAS.iter().position(|x| *x == tx), [par(t[0]), par(t[1]), par(t[2])], tinta)
+                }
+                None => (None, [egui::epaint::WHITE_UV; 3], [1.0; 3]),
+            };
+            let cor = match tex_i {
+                Some(_) => {
+                    let q = |x: f32| (x * k * 255.0).clamp(0.0, 255.0) as u8;
+                    Color32::from_rgb(q(tinta[0]), q(tinta[1]), q(tinta[2]))
+                }
+                None => cor_material(pc.material, k, escuro),
+            };
+            prims.push(Prim { pts: [proj(c[0]), proj(c[1]), proj(c[2])], uv, tex: tex_i, prof: (c[0][2] + c[1][2] + c[2][2]) / 3.0, cor });
         }
     }
-    // algoritmo do pintor: do mais distante para o mais próximo
+    // algoritmo do pintor: do mais distante para o mais próximo; uma malha por
+    // sequência de triângulos com a mesma textura
     prims.sort_by(|p, q| p.prof.total_cmp(&q.prof));
-    let mut malha = egui::Mesh::default();
+    let id_de = |t: Option<usize>| t.and_then(|i| tex.get(i)).map(|h| h.id()).unwrap_or_default();
+    let mut atual = id_de(prims.first().and_then(|p| p.tex));
+    let mut malha = egui::Mesh::with_texture(atual);
     for p in &prims {
+        let id = id_de(p.tex);
+        if id != atual {
+            painter.add(Shape::mesh(std::mem::replace(&mut malha, egui::Mesh::with_texture(id))));
+            atual = id;
+        }
         let i = malha.vertices.len() as u32;
-        for q in p.pts {
-            malha.colored_vertex(q, p.cor);
+        for k in 0..3 {
+            malha.vertices.push(egui::epaint::Vertex { pos: p.pts[k], uv: p.uv[k], color: p.cor });
         }
         malha.add_triangle(i, i + 1, i + 2);
     }
@@ -225,7 +268,8 @@ pub fn janela(ctx: &egui::Context, aberta: &mut bool, cam: &mut Camera, proj: &P
             if resp.double_clicked() {
                 cam.zoom = 1.0;
             }
-            renderizar(&painter.with_clip_rect(resp.rect), resp.rect, &m, cam, escuro);
+            let tex = super::texturas::carregar(ui.ctx());
+            renderizar(&painter.with_clip_rect(resp.rect), resp.rect, &m, cam, escuro, &tex);
             painter.rect_stroke(resp.rect, 8.0, Stroke::new(1.0_f32, p.borda), egui::StrokeKind::Inside);
             ui.label(
                 RichText::new(format!(
