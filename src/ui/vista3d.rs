@@ -3,7 +3,6 @@
 //! zoom, vistas prontas e exportação IFC.
 
 use super::tema;
-use super::texturas::{Tex, TODAS};
 use crate::modelo3d::{Classe, Material, Modelo3d, Tri};
 use crate::projeto::Projeto;
 use crate::resultado::{fmt, Resultado};
@@ -25,27 +24,29 @@ pub struct Camera {
 
 impl Default for Camera {
     fn default() -> Self {
-        Self { azimute: -0.75, elevacao: 0.45, zoom: 1.0, comprimento: 10.0, terreno: true, reforcos: true, drenagem: true, corte: true }
+        Self { azimute: -0.75, elevacao: 0.45, zoom: 1.0, comprimento: 10.0, terreno: true, reforcos: true, drenagem: true, corte: false }
     }
 }
 
-struct Prim {
-    pts: [Pos2; 3],
-    uv: [Pos2; 3],
-    tex: Option<usize>,
-    prof: f32,
-    cor: Color32,
+/// Triângulo pronto para desenhar: vértices no mundo, cor base e normal.
+struct TriCena {
+    v: Tri,
+    cor: [f32; 3],
+    /// Intensidade difusa da luz (fixa no mundo), já calculada.
+    luz: f32,
+    classe: Classe,
 }
 
-fn cor_material(m: Material, luz: f32, escuro: bool) -> Color32 {
-    let ([r, g, b], t) = m.cor();
-    let k = luz.clamp(0.0, 1.15);
-    let alfa = ((1.0 - t) * 255.0) as u8;
-    let _ = escuro;
-    Color32::from_rgba_unmultiplied((r as f32 * k * 255.0) as u8, (g as f32 * k * 255.0) as u8, (b as f32 * k * 255.0) as u8, alfa)
+/// Cena montada uma vez por projeto/opções (o desenho de cada quadro só projeta e ordena).
+pub struct Cena {
+    chave: u64,
+    tris: Vec<TriCena>,
+    centro: [f64; 3],
+    raio: f32,
+    pub modelo: Modelo3d,
 }
 
-/// Divide triângulos maiores que `s` (melhora a ordenação do pintor e permite textura).
+/// Divide triângulos maiores que `s` (ordem do pintor estável). Feito só na montagem.
 fn subdividir(t: Tri, s: f64, prof: u32, saida: &mut Vec<Tri>) {
     let d = |a: [f64; 3], b: [f64; 3]| ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt();
     let l = [d(t[0], t[1]), d(t[1], t[2]), d(t[2], t[0])];
@@ -60,131 +61,125 @@ fn subdividir(t: Tri, s: f64, prof: u32, saida: &mut Vec<Tri>) {
     subdividir([m, b, c], s, prof - 1, saida);
 }
 
-/// Textura e tamanho do ladrilho (m) de cada material; `None` = cor lisa
-/// (aço, PVC, cordoalha: modelagem sem textura).
-fn textura_de(m: Material, normal: [f64; 3]) -> Option<(Tex, f64, [f32; 3])> {
-    let branco = [1.0, 1.0, 1.0];
-    Some(match m {
-        Material::Concreto => (Tex::Concreto, 1.6, branco),
-        Material::Bulbo => (Tex::Concreto, 0.8, [0.95, 0.95, 0.92]),
-        Material::Pedra => (Tex::Pedra, 1.4, branco),
-        Material::Gabiao => (Tex::Gabiao, 1.0, branco),
-        // bolsa de brita envolta em manta: manta por fora, brita nas faces cortadas
-        Material::Brita => {
-            if normal[2].abs() > 0.9 {
-                (Tex::Brita, 0.45, branco)
-            } else {
-                (Tex::Geotextil, 0.6, branco)
-            }
-        }
-        Material::Areia => (Tex::Areia, 0.8, branco),
-        Material::Geocomposto => (Tex::Geotextil, 0.6, [0.25, 0.25, 0.27]),
-        Material::SoloArgila => (Tex::Argila, 2.2, branco),
-        Material::SoloAreia => (Tex::Areia, 1.6, branco),
-        Material::SoloSilte => (Tex::Silte, 2.0, branco),
-        Material::SoloAterro => (Tex::SoloEscuro, 1.6, branco),
-        Material::Reaterro => (Tex::SoloEscuro, 1.6, [1.12, 1.05, 1.0]),
-        _ => return None,
-    })
+/// Cor de cada material (tom médio do material real); a bolsa de brita mostra a
+/// manta geotêxtil por fora e a brita nas faces cortadas.
+fn cor_de(m: Material, normal: [f64; 3]) -> [f32; 3] {
+    if m == Material::Brita && normal[2].abs() <= 0.9 {
+        return [0.86, 0.86, 0.87]; // manta geotêxtil
+    }
+    let ([r, g, b], _) = m.cor();
+    [r as f32, g as f32, b as f32]
 }
 
-/// Desenha o modelo na área `rect`.
-fn renderizar(painter: &egui::Painter, rect: egui::Rect, m: &Modelo3d, cam: &Camera, escuro: bool, tex: &[egui::TextureHandle]) {
-    let (a, b) = m.caixa();
-    let centro = [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0, (a[2] + b[2]) / 2.0];
-    let raio = (((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2) + (b[2] - a[2]).powi(2)).sqrt() / 2.0).max(0.5) as f32;
-    let (sa, ca) = cam.azimute.sin_cos();
-    let (se, ce) = cam.elevacao.sin_cos();
-    let dist = 3.2 * raio;
-    let foco = 0.5 * rect.width().min(rect.height()) * 2.6 * cam.zoom;
-    let cam_pt = |v: [f64; 3]| -> [f32; 3] {
-        let (x, y, z) = ((v[0] - centro[0]) as f32, (v[1] - centro[1]) as f32, (v[2] - centro[2]) as f32);
-        let x1 = ca * x + sa * z;
-        let z1 = -sa * x + ca * z;
-        let y2 = ce * y - se * z1;
-        let z2 = se * y + ce * z1;
-        [x1, y2, z2]
-    };
-    let proj = |c: [f32; 3]| -> Pos2 {
-        let d = (dist - c[2]).max(0.05 * raio);
-        rect.center() + egui::vec2(foco * c[0] / d, -foco * c[1] / d)
-    };
-    // luz fixa no mundo (de cima, à esquerda e da frente) + luz ambiente
-    let luz = {
-        let l = [-0.45f64, 0.80, -0.40];
-        let n = (l[0] * l[0] + l[1] * l[1] + l[2] * l[2]).sqrt();
-        [l[0] / n, l[1] / n, l[2] / n]
-    };
-    let passo = (raio as f64 / 16.0).clamp(0.12, 1.2);
-    let mut prims: Vec<Prim> = Vec::new();
-    for pc in &m.pecas {
-        if (pc.classe == Classe::Terreno && !cam.terreno)
-            || (matches!(pc.classe, Classe::Tirante | Classe::Grampo | Classe::Placa | Classe::Cabeca) && !cam.reforcos)
-            || (matches!(pc.classe, Classe::Tubo | Classe::Filtro | Classe::Canaleta) && !cam.drenagem)
-        {
-            continue;
+impl Cena {
+    fn montar(chave: u64, modelo: Modelo3d) -> Self {
+        let (a, b) = modelo.caixa();
+        let centro = [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0, (a[2] + b[2]) / 2.0];
+        let raio = (((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2) + (b[2] - a[2]).powi(2)).sqrt() / 2.0).max(0.5);
+        // luz fixa no mundo (de cima, à esquerda e da frente)
+        let luz = {
+            let l = [-0.45f64, 0.80, -0.40];
+            let n = (l[0] * l[0] + l[1] * l[1] + l[2] * l[2]).sqrt();
+            [l[0] / n, l[1] / n, l[2] / n]
+        };
+        // só os blocos grandes (solo, muro) são subdivididos, e com passo largo
+        let passo = (raio / 7.0).clamp(0.4, 2.5);
+        let mut tris = Vec::new();
+        for pc in &modelo.pecas {
+            let grandes = matches!(pc.classe, Classe::Terreno | Classe::Muro | Classe::Sapata | Classe::Viga);
+            let mut ts = Vec::new();
+            for t in pc.forma.triangulos(8) {
+                if grandes { subdividir(t, passo, 8, &mut ts) } else { ts.push(t) }
+            }
+            for t in ts {
+                let u = [t[1][0] - t[0][0], t[1][1] - t[0][1], t[1][2] - t[0][2]];
+                let w = [t[2][0] - t[0][0], t[2][1] - t[0][1], t[2][2] - t[0][2]];
+                let n = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]];
+                let nl = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+                if nl < 1e-14 {
+                    continue;
+                }
+                let n = [n[0] / nl, n[1] / nl, n[2] / nl];
+                let difusa = (n[0] * luz[0] + n[1] * luz[1] + n[2] * luz[2]).abs() as f32;
+                tris.push(TriCena { v: t, cor: cor_de(pc.material, n), luz: 0.45 + 0.60 * difusa, classe: pc.classe });
+            }
         }
-        let mut tris: Vec<Tri> = Vec::new();
-        for t in pc.forma.triangulos(12) {
-            subdividir(t, passo, 12, &mut tris);
-        }
-        for t in tris {
-            let c = [cam_pt(t[0]), cam_pt(t[1]), cam_pt(t[2])];
+        Cena { chave, tris, centro, raio: raio as f32, modelo }
+    }
+
+    /// Projeta, ordena (pintor) e desenha numa única malha.
+    fn desenhar(&self, painter: &egui::Painter, rect: egui::Rect, cam: &Camera) {
+        let (sa, ca) = cam.azimute.sin_cos();
+        let (se, ce) = cam.elevacao.sin_cos();
+        let raio = self.raio;
+        let dist = 3.2 * raio;
+        let foco = 0.5 * rect.width().min(rect.height()) * 2.6 * cam.zoom;
+        let c0 = self.centro;
+        let cam_pt = |v: [f64; 3]| -> [f32; 3] {
+            let (x, y, z) = ((v[0] - c0[0]) as f32, (v[1] - c0[1]) as f32, (v[2] - c0[2]) as f32);
+            let x1 = ca * x + sa * z;
+            let z1 = -sa * x + ca * z;
+            [x1, ce * y - se * z1, se * y + ce * z1]
+        };
+        let centro_tela = rect.center();
+        let mut prims: Vec<(f32, [Pos2; 3], Color32)> = Vec::with_capacity(self.tris.len());
+        for t in &self.tris {
+            if (t.classe == Classe::Terreno && !cam.terreno)
+                || (matches!(t.classe, Classe::Tirante | Classe::Grampo | Classe::Placa | Classe::Cabeca) && !cam.reforcos)
+                || (matches!(t.classe, Classe::Tubo | Classe::Filtro | Classe::Canaleta) && !cam.drenagem)
+            {
+                continue;
+            }
+            let c = [cam_pt(t.v[0]), cam_pt(t.v[1]), cam_pt(t.v[2])];
             if c.iter().any(|q| dist - q[2] <= 0.05 * raio) {
                 continue;
             }
-            // normal no mundo (para luz e projeção da textura)
-            let u = [t[1][0] - t[0][0], t[1][1] - t[0][1], t[1][2] - t[0][2]];
-            let w = [t[2][0] - t[0][0], t[2][1] - t[0][1], t[2][2] - t[0][2]];
-            let n = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]];
-            let nl = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
-            if nl < 1e-14 {
-                continue;
+            let p = |q: [f32; 3]| {
+                let d = dist - q[2];
+                centro_tela + egui::vec2(foco * q[0] / d, -foco * q[1] / d)
+            };
+            let k = t.luz;
+            let q = |x: f32| (x * k * 255.0).clamp(0.0, 255.0) as u8;
+            prims.push(((c[0][2] + c[1][2] + c[2][2]) / 3.0, [p(c[0]), p(c[1]), p(c[2])], Color32::from_rgb(q(t.cor[0]), q(t.cor[1]), q(t.cor[2]))));
+        }
+        prims.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
+        let mut malha = egui::Mesh::default();
+        malha.reserve_triangles(prims.len());
+        malha.reserve_vertices(prims.len() * 3);
+        for (_, pts, cor) in prims {
+            let i = malha.vertices.len() as u32;
+            for q in pts {
+                malha.colored_vertex(q, cor);
             }
-            let n = [n[0] / nl, n[1] / nl, n[2] / nl];
-            let difusa = (n[0] * luz[0] + n[1] * luz[1] + n[2] * luz[2]).abs() as f32;
-            let k = 0.45 + 0.60 * difusa;
-            let (tex_i, uv, tinta) = match textura_de(pc.material, n) {
-                Some((tx, esc, tinta)) => {
-                    // projeção na face dominante (mapeamento planar por eixo)
-                    let (ax, ay, az) = (n[0].abs(), n[1].abs(), n[2].abs());
-                    let par = |p: [f64; 3]| -> Pos2 {
-                        let (s, r) = if ax >= ay && ax >= az { (p[2], p[1]) } else if ay >= az { (p[0], p[2]) } else { (p[0], p[1]) };
-                        Pos2::new((s / esc) as f32, (-r / esc) as f32)
-                    };
-                    (TODAS.iter().position(|x| *x == tx), [par(t[0]), par(t[1]), par(t[2])], tinta)
-                }
-                None => (None, [egui::epaint::WHITE_UV; 3], [1.0; 3]),
-            };
-            let cor = match tex_i {
-                Some(_) => {
-                    let q = |x: f32| (x * k * 255.0).clamp(0.0, 255.0) as u8;
-                    Color32::from_rgb(q(tinta[0]), q(tinta[1]), q(tinta[2]))
-                }
-                None => cor_material(pc.material, k, escuro),
-            };
-            prims.push(Prim { pts: [proj(c[0]), proj(c[1]), proj(c[2])], uv, tex: tex_i, prof: (c[0][2] + c[1][2] + c[2][2]) / 3.0, cor });
+            malha.add_triangle(i, i + 1, i + 2);
+        }
+        painter.add(Shape::mesh(malha));
+    }
+}
+
+/// Cena em cache: remonta só quando o projeto, o trecho ou o corte mudam.
+fn cena(ctx: &egui::Context, proj: &Projeto, res: &Resultado, cam: &Camera) -> std::sync::Arc<Cena> {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    format!("{proj:?}").hash(&mut h);
+    cam.comprimento.to_bits().hash(&mut h);
+    cam.corte.hash(&mut h);
+    let chave = h.finish();
+    let id = egui::Id::new("cena_3d");
+    if let Some(c) = ctx.data(|d| d.get_temp::<std::sync::Arc<Cena>>(id)) {
+        if c.chave == chave {
+            return c;
         }
     }
-    // algoritmo do pintor: do mais distante para o mais próximo; uma malha por
-    // sequência de triângulos com a mesma textura
-    prims.sort_by(|p, q| p.prof.total_cmp(&q.prof));
-    let id_de = |t: Option<usize>| t.and_then(|i| tex.get(i)).map(|h| h.id()).unwrap_or_default();
-    let mut atual = id_de(prims.first().and_then(|p| p.tex));
-    let mut malha = egui::Mesh::with_texture(atual);
-    for p in &prims {
-        let id = id_de(p.tex);
-        if id != atual {
-            painter.add(Shape::mesh(std::mem::replace(&mut malha, egui::Mesh::with_texture(id))));
-            atual = id;
-        }
-        let i = malha.vertices.len() as u32;
-        for k in 0..3 {
-            malha.vertices.push(egui::epaint::Vertex { pos: p.pts[k], uv: p.uv[k], color: p.cor });
-        }
-        malha.add_triangle(i, i + 1, i + 2);
-    }
-    painter.add(Shape::mesh(malha));
+    let c = std::sync::Arc::new(Cena::montar(chave, Modelo3d::montar(proj, res, cam.comprimento, cam.corte)));
+    ctx.data_mut(|d| d.insert_temp(id, c.clone()));
+    c
+}
+
+fn cor_material(m: Material, luz: f32) -> Color32 {
+    let ([r, g, b], _) = m.cor();
+    let q = |x: f64| (x as f32 * luz * 255.0).clamp(0.0, 255.0) as u8;
+    Color32::from_rgb(q(r), q(g), q(b))
 }
 
 /// Eixos e escala no canto da vista.
@@ -199,7 +194,7 @@ fn legenda(ui: &mut egui::Ui, m: &Modelo3d) {
     ui.horizontal_wrapped(|ui| {
         for mt in mats {
             let (r, _) = ui.allocate_exact_size(egui::vec2(12.0, 12.0), Sense::hover());
-            ui.painter().rect_filled(r, 2.0, cor_material(mt, 1.0, false));
+            ui.painter().rect_filled(r, 2.0, cor_material(mt, 1.0));
             ui.label(RichText::new(mt.nome()).small().color(p.fraco));
             ui.add_space(6.0);
         }
@@ -219,12 +214,13 @@ pub fn janela(ctx: &egui::Context, aberta: &mut bool, cam: &mut Camera, proj: &P
         .resizable(true)
         .collapsible(true)
         .show(ctx, |ui| {
-            let m = Modelo3d::montar(proj, res, cam.comprimento, cam.corte);
+            let cn = cena(ctx, proj, res, cam);
+            let m = &cn.modelo;
             ui.horizontal_wrapped(|ui| {
                 ui.label("Trecho");
                 ui.add(egui::DragValue::new(&mut cam.comprimento).range(2.0..=60.0).speed(0.2).suffix(" m"));
                 ui.checkbox(&mut cam.terreno, "Solo");
-                ui.add_enabled(cam.terreno, egui::Checkbox::new(&mut cam.corte, "Corte no maciço"));
+                ui.add_enabled(cam.terreno, egui::Checkbox::new(&mut cam.corte, "Corte no maciço")).on_hover_text("Mostra o solo só em metade do trecho, para ver tirantes, grampos e drenagem por dentro");
                 ui.checkbox(&mut cam.reforcos, "Tirantes/grampos");
                 ui.checkbox(&mut cam.drenagem, "Drenagem");
                 ui.separator();
@@ -248,7 +244,7 @@ pub fn janela(ctx: &egui::Context, aberta: &mut bool, cam: &mut Camera, proj: &P
                     }
                 }
             });
-            legenda(ui, &m);
+            legenda(ui, m);
             let alt = (ui.available_height() - 22.0).max(160.0);
             let (resp, painter) = ui.allocate_painter(egui::vec2(ui.available_width(), alt), Sense::click_and_drag());
             let p = tema::de(ui);
@@ -268,8 +264,7 @@ pub fn janela(ctx: &egui::Context, aberta: &mut bool, cam: &mut Camera, proj: &P
             if resp.double_clicked() {
                 cam.zoom = 1.0;
             }
-            let tex = super::texturas::carregar(ui.ctx());
-            renderizar(&painter.with_clip_rect(resp.rect), resp.rect, &m, cam, escuro, &tex);
+            cn.desenhar(&painter.with_clip_rect(resp.rect), resp.rect, cam);
             painter.rect_stroke(resp.rect, 8.0, Stroke::new(1.0_f32, p.borda), egui::StrokeKind::Inside);
             ui.label(
                 RichText::new(format!(

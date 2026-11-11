@@ -56,7 +56,7 @@ impl Material {
     /// Cor RGB (0–1) e transparência (0 = opaco).
     pub fn cor(&self) -> ([f64; 3], f64) {
         let c = match self {
-            Material::Concreto => [0.70, 0.70, 0.67],
+            Material::Concreto => [0.64, 0.64, 0.62],
             Material::Pedra => [0.56, 0.51, 0.44],
             Material::Gabiao => [0.52, 0.50, 0.47],
             Material::Aco => [0.40, 0.44, 0.50],
@@ -64,14 +64,14 @@ impl Material {
             Material::TiranteLivre => [0.20, 0.22, 0.25],
             Material::Bulbo => [0.62, 0.62, 0.58],
             Material::Grampo => [0.55, 0.30, 0.20],
-            Material::Brita => [0.58, 0.59, 0.60],
-            Material::Areia => [0.86, 0.77, 0.56],
+            Material::Brita => [0.56, 0.56, 0.57],
+            Material::Areia => [0.83, 0.72, 0.52],
             Material::Geocomposto => [0.12, 0.12, 0.13],
-            Material::SoloArgila => [0.60, 0.32, 0.20],
-            Material::SoloAreia => [0.80, 0.68, 0.46],
+            Material::SoloArgila => [0.72, 0.43, 0.25],
+            Material::SoloAreia => [0.82, 0.70, 0.50],
             Material::SoloSilte => [0.66, 0.53, 0.36],
-            Material::SoloAterro => [0.42, 0.33, 0.25],
-            Material::Reaterro => [0.55, 0.42, 0.29],
+            Material::SoloAterro => [0.32, 0.24, 0.17],
+            Material::Reaterro => [0.42, 0.32, 0.23],
         };
         (c, 0.0)
     }
