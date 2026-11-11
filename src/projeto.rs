@@ -157,7 +157,7 @@ fn verdadeiro() -> bool {
 }
 
 /// Arredonda para cima em múltiplos de 5 cm.
-fn arred(x: f64) -> f64 {
+pub fn arred(x: f64) -> f64 {
     (x / 0.05 - 1e-9).ceil() * 0.05
 }
 
@@ -544,7 +544,9 @@ impl Projeto {
         g
     }
 
-    pub fn calcular(&self) -> Resultado {
+    /// Cálculo do tipo de contenção e da drenagem, sem a estabilidade global
+    /// (rápido; uso do otimizador nos ajustes estruturais).
+    pub fn calcular_local(&self) -> Resultado {
         let f = &self.fatores;
         let mut r = match self.tipo {
             TipoContencao::Gravidade => self.preparar_gravidade().calcular(f),
@@ -555,6 +557,12 @@ impl Projeto {
             TipoContencao::Grampeado => self.preparar_grampeado().calcular(f),
         };
         self.drenagem_no_resultado(&mut r);
+        r
+    }
+
+    pub fn calcular(&self) -> Resultado {
+        let f = &self.fatores;
+        let mut r = self.calcular_local();
         self.estabilidade_global(&mut r);
         r.desenho.hachurar_solos();
         if self.reaterro.usar && matches!(self.tipo, TipoContencao::Gravidade | TipoContencao::Flexao) {
@@ -671,6 +679,7 @@ impl Projeto {
         r.aviso("Parâmetros obtidos por correlações com o SPT são estimativas; confirmar com ensaios de laboratório/campo.");
         cab.append(&mut r.blocos);
         r.blocos = cab;
+        r.referencias = crate::referencias::gerar(&r);
         r
     }
 

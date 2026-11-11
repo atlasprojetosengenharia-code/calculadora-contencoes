@@ -334,6 +334,12 @@ fn corpo(res: &Resultado, titulo_memorial: &str, versao: &str, figs: &[(String, 
         None,
         None,
     );
+    if !res.referencias.is_empty() {
+        x += &titulo("Referências bibliográficas", 1);
+        for r in &res.referencias {
+            x += &texto(r);
+        }
+    }
     x += &titulo("Responsabilidade técnica", 1);
     x += &texto("Responsável técnico: ______________________________________    CREA/CAU: ____________________");
     x += &texto("Data: ____ / ____ / ________                       Assinatura: ______________________________________");

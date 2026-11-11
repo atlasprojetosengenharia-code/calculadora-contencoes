@@ -1,6 +1,6 @@
 [package]
 name = "calculadora_contencoes"
-version = "0.3.2"
+version = "0.3.3"
 edition = "2024"
 description = "Software de análise e dimensionamento de contenções (NBR 11682, 6122, 5629, 16920, 6118)"
 authors = ["Atlas Projetos e Engenharia LTDA"]

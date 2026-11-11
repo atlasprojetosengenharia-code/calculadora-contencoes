@@ -20,11 +20,6 @@ pub const EMPRESA: &str = "Atlas Projetos e Engenharia LTDA";
 pub const SITE: &str = "https://www.atlasprojetos.eng.br";
 pub const ANO: &str = "2026";
 
-/// Licença do software.
-pub const LICENCA: &str = "Licença proprietária (todos os direitos reservados)";
-/// Linguagem e bibliotecas principais.
-pub const LINGUAGEM: &str = "Rust (edição 2024) · interface egui/eframe";
-
 /// Endereço do site sem o protocolo (para exibição).
 pub fn site_curto() -> &'static str {
     SITE.trim_start_matches("https://")

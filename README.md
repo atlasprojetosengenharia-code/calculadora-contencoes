@@ -8,7 +8,10 @@ flexão, cortina atirantada, estaca-prancha, parede de estacas e solo grampeado.
 - Empuxo por **Rankine** ou **Coulomb**, sobrecarga, carga em faixa, água e sismo (Mononobe-Okabe)
 - Drenagem: barbacãs, filtro, dreno de pé, canaleta e DHP
 - Verificações conforme **NBR 11682, NBR 6122, NBR 5629, NBR 16920-2, NBR 6118:2023 e NBR 6120:2019**
-- Memorial de cálculo visual: fórmulas passo a passo, referências normativas e status de cada verificação; relatório HTML (imprimível em PDF) e texto
+- Estabilidade global por **Bishop simplificado** (com tirantes e grampos)
+- Estaca-prancha com os perfis comerciais do catálogo **VPA** (aço U, Z e W; PVC VANIL®)
+- **Otimizador**: escolhe a alternativa mais econômica que atende a todas as verificações
+- Memorial de cálculo visual: fórmulas passo a passo, referências normativas e status de cada verificação; relatório HTML (imprimível em PDF), `.docx` e texto
 - Projetos salvos em `.ctc`
 
 ## Informações
@@ -17,14 +20,14 @@ flexão, cortina atirantada, estaca-prancha, parede de estacas e solo grampeado.
 |---|---|
 | Linguagem | **Rust** (edição 2024) |
 | Interface | egui / eframe (aplicativo desktop nativo, Windows) |
-| Licença | **Proprietária** — todos os direitos reservados (ver [LICENSE](LICENSE)) |
+| Licença | **Proprietária** — todos os direitos reservados; código público apenas para consulta (ver [LICENSE](LICENSE)) |
 | Titular | Atlas Projetos e Engenharia LTDA — https://www.atlasprojetos.eng.br |
 
 ## Download
 
 Cada versão lançada (tag `vX.Y.Z`) é publicada no
-repositório público **[calculadora-contencoes-releases](https://github.com/atlasprojetosengenharia-code/calculadora-contencoes-releases/releases)**
-(somente executáveis — o código permanece neste repositório privado). Baixe o `.zip`, descompacte e execute
+repositório **[calculadora-contencoes-releases](https://github.com/atlasprojetosengenharia-code/calculadora-contencoes-releases/releases)**.
+Baixe o `.zip`, descompacte e execute
 `CalculadoraContencoes.exe` — não requer instalação. O programa avisa quando
 houver versão mais nova.
 

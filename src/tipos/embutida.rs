@@ -7,6 +7,7 @@ use crate::concreto::{as_circular, Concreto};
 use crate::empuxo::{integrar, rad, ParamEmpuxo, Teoria};
 use crate::fatores::Fatores;
 use crate::normas;
+use crate::perfis_prancha::{self, Catalogo};
 use crate::resultado::{fmt, Desenho, Estilo, Resultado, Verificacao};
 use crate::solo::{Cargas, Perfil, GAMMA_W};
 use serde::{Deserialize, Serialize};
@@ -36,6 +37,10 @@ pub struct ParedeEmbutida {
     pub perfil: Perfil,
     pub cargas: Cargas,
     pub empuxo: ParamEmpuxo,
+    /// Acréscimo construtivo de ficha além da ficha de projeto (m) — p. ex. para a
+    /// estabilidade global (círculos sob a ponta).
+    #[serde(default)]
+    pub ficha_adicional: f64,
 }
 
 impl Default for ParedeEmbutida {
@@ -54,6 +59,7 @@ impl Default for ParedeEmbutida {
             perfil,
             cargas: Cargas::default(),
             empuxo: ParamEmpuxo::default(),
+            ficha_adicional: 0.0,
         }
     }
 }
@@ -193,7 +199,7 @@ impl ParedeEmbutida {
 
         Ok(Solucao {
             d0,
-            d: d0 * fator,
+            d: d0 * fator + self.ficha_adicional.max(0.0),
             t,
             contraforca: if self.apoio == Apoio::Balanco { -resultante } else { 0.0 },
             m_max: m_max.abs(),
@@ -291,7 +297,16 @@ impl ParedeEmbutida {
                         ),
                         format!("D = {} m ;  M_máx = {} kN·m/m ;  V_máx = {} kN/m", fmt(s.d), fmt(s.m_max), fmt(s.v_max)),
                     );
-                    r.linha(format!("Ficha teórica D0 = {} m ; ficha de projeto D = {} m", fmt(s.d0), fmt(s.d)));
+                    if self.ficha_adicional > 0.0 {
+                        r.linha(format!(
+                            "Ficha teórica D0 = {} m ; ficha de projeto D = f·D0 + acréscimo construtivo {} m = {} m",
+                            fmt(s.d0),
+                            fmt(self.ficha_adicional),
+                            fmt(s.d)
+                        ));
+                    } else {
+                        r.linha(format!("Ficha teórica D0 = {} m ; ficha de projeto D = {} m", fmt(s.d0), fmt(s.d)));
+                    }
                     r.linha(format!("Comprimento total da parede = {} m", fmt(self.h + s.d)));
                     if self.apoio == Apoio::Ancorada {
                         r.linha(format!("Reação no apoio T = {} kN/m", fmt(s.t)));
@@ -416,26 +431,88 @@ pub struct EstacaPrancha {
 
 impl Default for EstacaPrancha {
     fn default() -> Self {
-        Self { parede: ParedeEmbutida::default(), nome_perfil: "Perfil a definir".into(), w_perfil: 1300.0, fy: 270.0, viga_h: 0.5 }
+        Self { parede: ParedeEmbutida::default(), nome_perfil: "VPA-MTZ 23".into(), w_perfil: 1306.0, fy: 345.0, viga_h: 0.5 }
     }
 }
 
 impl EstacaPrancha {
+    /// Perfil do catálogo VPA correspondente ao nome (None = perfil personalizado).
+    pub fn catalogo(&self) -> Option<Catalogo> {
+        perfis_prancha::buscar(&self.nome_perfil)
+    }
+
+    /// Módulo resistente efetivo (catálogo, quando o perfil é de catálogo).
+    pub fn w_efetivo(&self) -> f64 {
+        match self.catalogo() {
+            Some(Catalogo::Aco(p)) => p.w,
+            Some(Catalogo::Pvc(p)) => p.w,
+            None => self.w_perfil,
+        }
+    }
+
+    /// Peso da parede (kg/m²): catálogo, ou estimado para perfil personalizado.
+    pub fn peso_parede(&self) -> f64 {
+        match self.catalogo() {
+            Some(Catalogo::Aco(p)) => p.peso_parede,
+            // PVC: densidade ~1,4 t/m³ e desenvolvimento ≈ 1,6·b → ≈ 2,2·t (mm) kg/m²
+            Some(Catalogo::Pvc(p)) => 2.2 * p.t,
+            None => 60.0 + 0.025 * self.w_perfil,
+        }
+    }
+
     /// Detalhamento: perfil, engastamento e viga de travamento (chapéu).
     fn detalhamento(&self, r: &mut Resultado, s: &Solucao) {
         r.titulo("Detalhamento construtivo — estaca-prancha");
         r.norma(normas::NBR8800_FLEXAO);
-        r.linha(format!(
-            "Perfil: {} (W = {} cm³/m, fy = {} MPa) ; cravação contínua com encaixes (juntas) travados",
-            self.nome_perfil,
-            fmt(self.w_perfil),
-            fmt(self.fy)
-        ));
+        let lt = self.parede.h + s.d;
+        match self.catalogo() {
+            Some(Catalogo::Aco(p)) => {
+                r.linha(format!(
+                    "Perfil {} (catálogo VPA, perfil {} perfilado a frio): b = {} mm ; h = {} mm ; t = {} mm ; W = {} cm³/m ; I = {} cm⁴/m ; fy = {} MPa",
+                    p.nome,
+                    p.forma.nome(),
+                    fmt(p.b),
+                    fmt(p.h),
+                    fmt(p.t),
+                    fmt(p.w),
+                    fmt(p.inercia),
+                    fmt(self.fy)
+                ));
+                r.linha(format!(
+                    "Peso: {} kg/m por estaca ; {} kg/m² de parede → {} kg de aço por metro de contenção (comprimento {} m) ; {} estacas por 10 m de parede",
+                    fmt(p.peso_estaca),
+                    fmt(p.peso_parede),
+                    fmt(p.peso_parede * lt),
+                    fmt(lt),
+                    fmt((10_000.0 / p.b).ceil())
+                ));
+            }
+            Some(Catalogo::Pvc(p)) => {
+                r.linha(format!(
+                    "Perfil {} (VANIL® PVC, catálogo VPA, perfil {}): b = {} mm ; h = {} mm ; t = {} mm ; W = {} cm³/m ; I = {} cm⁴/m ; M_adm = {} kN·m/m",
+                    p.nome,
+                    p.forma.nome(),
+                    fmt(p.b),
+                    fmt(p.h),
+                    fmt(p.t),
+                    fmt(p.w),
+                    fmt(p.inercia),
+                    fmt(p.m_adm)
+                ));
+            }
+            None => r.linha(format!(
+                "Perfil: {} (W = {} cm³/m, fy = {} MPa) — perfil personalizado, conferir com o catálogo do fabricante",
+                self.nome_perfil,
+                fmt(self.w_perfil),
+                fmt(self.fy)
+            )),
+        }
+        r.linha("Cravação contínua com encaixes (juntas) travados.");
         r.linha(format!(
             "Altura escavada {} m ; engastamento (ficha) {} m ; comprimento total do perfil {} m",
             fmt(self.parede.h),
             fmt(s.d),
-            fmt(self.parede.h + s.d)
+            fmt(lt)
         ));
         let (fck, fyk, cob) = (25.0, 500.0, 0.04);
         let tab = armadura::viga_construtiva("N1", "N2", "Viga de travamento (chapéu)", 0.40, self.viga_h, fck, fyk, cob);
@@ -454,28 +531,59 @@ impl EstacaPrancha {
         r.armaduras.extend(tab);
     }
 
-
     pub fn calcular(&self, fat: &Fatores) -> Resultado {
         let mut r = Resultado::default();
         let s = self.parede.analisar(&mut r, fat);
         if let Some(s) = &s {
-            r.titulo("Dimensionamento do perfil (NBR 8800 — flexão elástica)");
-            let md = fat.gamma_f * s.m_max;
-            let fyd = self.fy / fat.gamma_a1;
-            let w_nec = md * 1e6 / fyd / 1000.0;
-            r.linha(format!(
-                "Md = γf·M = {} kN·m/m ; fyd = fy/γa1 = {} MPa ; Wnec = Md/fyd = {} cm³/m",
-                fmt(md), fmt(fyd), fmt(w_nec)
-            ));
-            r.norma(normas::NBR8800_FLEXAO);
-            r.formula(
-                "Módulo resistente necessário do perfil",
-                "Md = γf·M_máx ;  fyd = fy / γa1 ;  W_nec = Md / fyd",
-                format!("Md = {}·{} ;  fyd = {} / {}", fmt(fat.gamma_f), fmt(s.m_max), fmt(self.fy), fmt(fat.gamma_a1)),
-                format!("W_nec = {} cm³/m ;  W_perfil = {} cm³/m", fmt(w_nec), fmt(self.w_perfil)),
-            );
-            r.verif(Verificacao::min(format!("W do perfil ({})", self.nome_perfil), self.w_perfil, w_nec, "cm³/m"));
-            r.aviso("Verificar também deslocamentos e a classe da seção (flambagem local) conforme catálogo do fabricante.");
+            match self.catalogo() {
+                Some(Catalogo::Pvc(p)) => {
+                    r.titulo("Dimensionamento do perfil de PVC (momento admissível do fabricante)");
+                    r.formula(
+                        "Momento característico × momento admissível (catálogo VANIL®)",
+                        "M_k = M_máx (ações características) ≤ M_adm",
+                        format!("M_k = {} kN·m/m ;  M_adm = {} kN·m/m ({})", fmt(s.m_max), fmt(p.m_adm), p.nome),
+                        format!("utilização = {} %", fmt(100.0 * s.m_max / p.m_adm)),
+                    );
+                    r.verif(Verificacao::max(format!("Momento no perfil PVC ({})", p.nome), s.m_max, p.m_adm, "kN·m/m"));
+                    r.aviso("PVC: verificar deformação e fluência a longo prazo; o momento admissível do catálogo já inclui o fator de segurança do fabricante (M_máx = 2·M_adm).");
+                }
+                _ => {
+                    let w = self.w_efetivo();
+                    r.titulo("Dimensionamento do perfil (NBR 8800 — flexão elástica)");
+                    let md = fat.gamma_f * s.m_max;
+                    let fyd = self.fy / fat.gamma_a1;
+                    let w_nec = md * 1e6 / fyd / 1000.0;
+                    r.linha(format!(
+                        "Md = γf·M = {} kN·m/m ; fyd = fy/γa1 = {} MPa ; Wnec = Md/fyd = {} cm³/m",
+                        fmt(md),
+                        fmt(fyd),
+                        fmt(w_nec)
+                    ));
+                    r.norma(normas::NBR8800_FLEXAO);
+                    r.formula(
+                        "Módulo resistente necessário do perfil",
+                        "Md = γf·M_máx ;  fyd = fy / γa1 ;  W_nec = Md / fyd",
+                        format!("Md = {}·{} ;  fyd = {} / {}", fmt(fat.gamma_f), fmt(s.m_max), fmt(self.fy), fmt(fat.gamma_a1)),
+                        format!("W_nec = {} cm³/m ;  W_perfil = {} cm³/m", fmt(w_nec), fmt(w)),
+                    );
+                    r.verif(Verificacao::min(format!("W do perfil ({})", self.nome_perfil), w, w_nec, "cm³/m"));
+                    match perfis_prancha::aco_mais_leve(w_nec) {
+                        Some(p) if p.nome != self.nome_perfil => r.linha(format!(
+                            "Perfil VPA mais leve que atende (W ≥ {} cm³/m): {} — W = {} cm³/m, {} kg/m².",
+                            fmt(w_nec),
+                            p.nome,
+                            fmt(p.w),
+                            fmt(p.peso_parede)
+                        )),
+                        None => r.aviso(format!(
+                            "Nenhum perfil do catálogo VPA atinge W = {} cm³/m: use apoio (tirante/estronca), perfil duplo/caixão ou outro tipo de contenção.",
+                            fmt(w_nec)
+                        )),
+                        _ => {}
+                    }
+                    r.aviso("Verificar também deslocamentos e a classe da seção (flambagem local) conforme catálogo do fabricante.");
+                }
+            }
         }
         if let Some(s) = &s {
             self.detalhamento(&mut r, s);

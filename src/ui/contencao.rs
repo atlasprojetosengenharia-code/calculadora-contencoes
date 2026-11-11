@@ -18,6 +18,7 @@ use crate::tipos::embutida::{Apoio, EstacaPrancha, ParedeEmbutida, ParedeEstacas
 use crate::tipos::flexao::MuroFlexao;
 use crate::tipos::grampeado::SoloGrampeado;
 use crate::alvenaria::CLASSES_ARGAMASSA;
+use std::sync::{Arc, Mutex};
 use crate::tipos::gravidade::{Material, MuroGravidade, MATERIAIS};
 use eframe::egui::{self, RichText, Stroke};
 
@@ -109,6 +110,7 @@ pub fn lista_verificacoes(ui: &mut egui::Ui, res: &Resultado) {
 
 /// Campos de entrada. Retorna `true` se o pré-dimensionamento deve ser aplicado.
 fn entradas(ui: &mut egui::Ui, proj: &mut Projeto, res: &Resultado) -> bool {
+    let otimizando = acompanhar_otimizacao(ui.ctx(), proj);
     let tipo = proj.tipo;
     let mut pre_dim = false;
     let mut otimizar_pedido = false;
@@ -152,23 +154,33 @@ fn entradas(ui: &mut egui::Ui, proj: &mut Projeto, res: &Resultado) -> bool {
                 }
             });
             nota(ui, regra);
-            let chave_msg = egui::Id::new(("predim_msg", tipo.arquivo()));
-            if let Some(m) = ui.ctx().data(|d| d.get_temp::<String>(chave_msg)) {
-                let p = tema::de(ui);
-                let nao_atende = m.contains("Ainda não atende") || m.contains("nenhuma das");
-                let cor = if nao_atende { p.alerta } else { p.ok };
-                ui.label(RichText::new(m.clone()).small().color(cor));
-                if nao_atende && !m.starts_with("Otimização") {
-                    if ui
-                        .small_button("⚙ Otimizar: solução econômica que atende")
-                        .on_hover_text("Avalia as alternativas usuais deste tipo (base, dente, passivo, níveis, malha, perfil…) e aplica a mais econômica que aprova todas as verificações")
-                        .clicked()
-                    {
-                        otimizar_pedido = true;
-                    }
+        }
+        let chave_msg = egui::Id::new(("predim_msg", tipo.arquivo()));
+        if let Some(m) = ui.ctx().data(|d| d.get_temp::<String>(chave_msg)) {
+            let p = tema::de(ui);
+            let nao_atende = m.contains("Ainda não atende") || m.contains("nenhuma das") || m.contains("descartado");
+            let cor = if nao_atende { p.alerta } else { p.ok };
+            ui.label(RichText::new(m).small().color(cor));
+        }
+        ui.horizontal_wrapped(|ui| {
+            if otimizando {
+                ui.spinner();
+                ui.label(RichText::new("Otimizando: avaliando as alternativas…").small());
+            } else {
+                let rotulo = if res.atende() { "⚙ Otimizar custo" } else { "⚙ Otimizar: solução econômica que atende" };
+                if ui
+                    .small_button(rotulo)
+                    .on_hover_text(
+                        "Avalia as alternativas usuais deste tipo (base, dente, passivo, embutimento, níveis de tirantes, malha e barras dos grampos, \
+                         apoio, ficha, perfil do catálogo VPA…), ajusta espessuras e placas e aplica a mais econômica que aprova TODAS as verificações, \
+                         inclusive a estabilidade global",
+                    )
+                    .clicked()
+                {
+                    otimizar_pedido = true;
                 }
             }
-        }
+        });
         if geometria.q + 1e-9 < fatores.sobrecarga_minima {
             ui.label(RichText::new(format!("⚠ q abaixo do mínimo de {} kPa (NBR 11682 7.3.3)", fmt(fatores.sobrecarga_minima))).small().color(tema::de(ui).alerta));
         }
@@ -229,16 +241,69 @@ fn entradas(ui: &mut egui::Ui, proj: &mut Projeto, res: &Resultado) -> bool {
     });
     ui.add_space(20.0);
     if otimizar_pedido {
-        let base = crate::otimizar::custo(proj);
-        let o = crate::otimizar::otimizar(proj);
-        let msg = o.mensagem(base);
-        if let Some(m) = o.melhor {
-            *proj = m.projeto;
-            proj.nota_otimizacao = msg.clone();
-        }
-        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(("predim_msg", tipo.arquivo())), msg));
+        // roda em segundo plano: a janela continua respondendo durante a avaliação
+        let base = proj.clone();
+        let base_json = serde_json::to_string(&base).unwrap_or_default();
+        let estado: Arc<Mutex<EstadoOtim>> = Arc::new(Mutex::new(EstadoOtim::Rodando));
+        let e2 = estado.clone();
+        let ctx = ui.ctx().clone();
+        std::thread::spawn(move || {
+            let custo_base = crate::otimizar::custo(&base);
+            let o = crate::otimizar::otimizar(&base);
+            if let Ok(mut e) = e2.lock() {
+                *e = EstadoOtim::Pronto(Box::new((custo_base, o)));
+            }
+            ctx.request_repaint();
+        });
+        ui.ctx().data_mut(|d| d.insert_temp(id_otim(), TarefaOtim { estado, base_json, tipo }));
     }
     pre_dim
+}
+
+/// Estado da otimização em segundo plano.
+enum EstadoOtim {
+    Rodando,
+    Pronto(Box<(f64, crate::otimizar::Otimizacao)>),
+}
+
+#[derive(Clone)]
+struct TarefaOtim {
+    estado: Arc<Mutex<EstadoOtim>>,
+    /// Projeto no momento do pedido: o resultado só é aplicado se nada mudou desde então.
+    base_json: String,
+    tipo: TipoContencao,
+}
+
+fn id_otim() -> egui::Id {
+    egui::Id::new("otimizacao_em_andamento")
+}
+
+/// Verifica a otimização em segundo plano; aplica o resultado quando pronto.
+/// Retorna `true` enquanto ainda estiver rodando.
+fn acompanhar_otimizacao(ctx: &egui::Context, proj: &mut Projeto) -> bool {
+    let Some(t) = ctx.data(|d| d.get_temp::<TarefaOtim>(id_otim())) else { return false };
+    let pronto = match t.estado.lock() {
+        Ok(mut e) => match std::mem::replace(&mut *e, EstadoOtim::Rodando) {
+            EstadoOtim::Pronto(r) => Some(r),
+            EstadoOtim::Rodando => None,
+        },
+        Err(_) => None,
+    };
+    let Some(r) = pronto else {
+        ctx.request_repaint_after(std::time::Duration::from_millis(150));
+        return true;
+    };
+    ctx.data_mut(|d| d.remove::<TarefaOtim>(id_otim()));
+    let (custo_base, o) = *r;
+    let mut msg = o.mensagem(custo_base);
+    if serde_json::to_string(&*proj).unwrap_or_default() != t.base_json {
+        msg = "Otimização descartada: o projeto foi alterado durante o cálculo. Clique em Otimizar novamente.".into();
+    } else if let Some(m) = o.melhor {
+        *proj = m.projeto;
+        proj.nota_otimizacao = msg.clone();
+    }
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new(("predim_msg", t.tipo.arquivo())), msg));
+    false
 }
 
 fn teoria(ui: &mut egui::Ui, e: &mut ParamEmpuxo) {
@@ -538,6 +603,7 @@ fn det_parede(ui: &mut egui::Ui, p: &mut ParedeEmbutida, emp: &ParamEmpuxo) {
         if emp.teoria == Teoria::Coulomb {
             num(ui, "δ no lado passivo", &mut p.delta_passivo, "°", 0.0..=30.0, 0.25);
         }
+        num(ui, "Acréscimo construtivo de ficha", &mut p.ficha_adicional, "m", 0.0..=15.0, 0.05);
     });
     ui.horizontal(|ui| {
         super::widgets::caixa(ui, &mut p.usar_na_frente, "NA no lado escavado a");
@@ -548,15 +614,96 @@ fn det_parede(ui: &mut egui::Ui, p: &mut ParedeEmbutida, emp: &ParamEmpuxo) {
 fn det_prancha(ui: &mut egui::Ui, e: &mut EstacaPrancha, emp: &ParamEmpuxo) {
     det_parede(ui, &mut e.parede, emp);
     ui.separator();
+    use crate::perfis_prancha::{self as cat, Catalogo};
+    let atual = e.catalogo();
+    let texto = match atual {
+        Some(Catalogo::Aco(p)) => format!("{} — W {} cm³/m, {} kg/m²", p.nome, fmt(p.w), fmt(p.peso_parede)),
+        Some(Catalogo::Pvc(p)) => format!("{} (PVC) — Madm {} kN·m/m", p.nome, fmt(p.m_adm)),
+        None => "Personalizado".into(),
+    };
     ui.horizontal(|ui| {
-        super::widgets::rotulo(ui, "Perfil:");
-        ui.add(egui::TextEdit::singleline(&mut e.nome_perfil).desired_width(180.0));
+        super::widgets::rotulo(ui, "Perfil (catálogo VPA):");
+        egui::ComboBox::from_id_salt("perfil_prancha").width(260.0).selected_text(texto).height(420.0).show_ui(ui, |ui| {
+            ui.label(RichText::new("Aço — perfis U").strong());
+            for p in cat::ACO.iter().filter(|p| p.forma == cat::Forma::U) {
+                if ui.selectable_label(e.nome_perfil == p.nome, format!("{}   W {} cm³/m · {} kg/m²", p.nome, fmt(p.w), fmt(p.peso_parede))).clicked() {
+                    e.nome_perfil = p.nome.into();
+                    e.w_perfil = p.w;
+                }
+            }
+            ui.separator();
+            ui.label(RichText::new("Aço — perfis Z").strong());
+            for p in cat::ACO.iter().filter(|p| p.forma == cat::Forma::Z) {
+                if ui.selectable_label(e.nome_perfil == p.nome, format!("{}   W {} cm³/m · {} kg/m²", p.nome, fmt(p.w), fmt(p.peso_parede))).clicked() {
+                    e.nome_perfil = p.nome.into();
+                    e.w_perfil = p.w;
+                }
+            }
+            ui.separator();
+            ui.label(RichText::new("Aço — perfis W (pequenas contenções)").strong());
+            for p in cat::ACO.iter().filter(|p| p.forma == cat::Forma::W) {
+                if ui.selectable_label(e.nome_perfil == p.nome, format!("{}   W {} cm³/m · {} kg/m²", p.nome, fmt(p.w), fmt(p.peso_parede))).clicked() {
+                    e.nome_perfil = p.nome.into();
+                    e.w_perfil = p.w;
+                }
+            }
+            ui.separator();
+            ui.label(RichText::new("PVC VANIL®").strong());
+            for p in cat::PVC.iter() {
+                if ui.selectable_label(e.nome_perfil == p.nome, format!("{}   Madm {} kN·m/m · W {} cm³/m", p.nome, fmt(p.m_adm), fmt(p.w))).clicked() {
+                    e.nome_perfil = p.nome.into();
+                    e.w_perfil = p.w;
+                }
+            }
+            ui.separator();
+            if ui.selectable_label(atual.is_none(), "Personalizado (informar W)").clicked() && atual.is_some() {
+                e.nome_perfil = "Perfil personalizado".into();
+            }
+        });
     });
+    match atual {
+        Some(Catalogo::Aco(p)) => nota(
+            ui,
+            &format!(
+                "{} {}: b = {} mm · h = {} mm · t = {} mm · I = {} cm⁴/m · {} kg/m por estaca.",
+                p.nome, p.forma.nome(), fmt(p.b), fmt(p.h), fmt(p.t), fmt(p.inercia), fmt(p.peso_estaca)
+            ),
+        ),
+        Some(Catalogo::Pvc(p)) => nota(
+            ui,
+            &format!(
+                "{} {}: b = {} mm · h = {} mm · t = {} mm · I = {} cm⁴/m. Verificado pelo momento admissível do fabricante.",
+                p.nome, p.forma.nome(), fmt(p.b), fmt(p.h), fmt(p.t), fmt(p.inercia)
+            ),
+        ),
+        None => {
+            ui.horizontal(|ui| {
+                super::widgets::rotulo(ui, "Nome:");
+                ui.add(egui::TextEdit::singleline(&mut e.nome_perfil).desired_width(180.0));
+            });
+        }
+    }
+    let pvc = matches!(atual, Some(Catalogo::Pvc(_)));
     grade(ui, "pran", |ui| {
-        num(ui, "Módulo resistente W", &mut e.w_perfil, "cm³/m", 100.0..=10000.0, 5.0);
+        if atual.is_none() {
+            num(ui, "Módulo resistente W", &mut e.w_perfil, "cm³/m", 50.0..=10000.0, 5.0);
+        }
         num(ui, "Altura da viga de travamento", &mut e.viga_h, "m", 0.3..=1.5, 0.01);
-        num(ui, "fy do aço", &mut e.fy, "MPa", 200.0..=500.0, 5.0);
+        if !pvc {
+            super::widgets::rotulo(ui, "Aço do perfil");
+            let nome_aco = cat::ACOS.iter().find(|a| (a.1 - e.fy).abs() < 0.01).map(|a| a.0.to_string()).unwrap_or_else(|| format!("Outro (fy {} MPa)", fmt(e.fy)));
+            egui::ComboBox::from_id_salt("aco_prancha").width(230.0).selected_text(nome_aco).show_ui(ui, |ui| {
+                for (nome, fy) in cat::ACOS {
+                    ui.selectable_value(&mut e.fy, fy, nome);
+                }
+            });
+            ui.end_row();
+            num(ui, "fy do aço", &mut e.fy, "MPa", 200.0..=500.0, 5.0);
+        }
     });
+    if !pvc {
+        nota(ui, "O catálogo VPA não informa a classe do aço: confirme o fy com o fornecedor.");
+    }
 }
 
 fn det_estacas(ui: &mut egui::Ui, e: &mut ParedeEstacas, emp: &ParamEmpuxo) {

@@ -475,6 +475,8 @@ pub struct Resultado {
     pub armaduras: Vec<crate::armadura::Armadura>,
     /// Reforços (tirantes/grampos) para a estabilidade global.
     pub reforcos: Vec<crate::global::Reforco>,
+    /// Referências bibliográficas (ABNT NBR 6023), impressas no final do memorial.
+    pub referencias: Vec<String>,
 }
 
 impl Resultado {
@@ -556,6 +558,12 @@ impl Resultado {
             }
         }
         let _ = writeln!(s, "\nReferências normativas: sínteses dos requisitos — consulte o texto integral das normas ABNT.");
+        if !self.referencias.is_empty() {
+            let _ = writeln!(s, "\n== REFERÊNCIAS BIBLIOGRÁFICAS ==");
+            for r in &self.referencias {
+                let _ = writeln!(s, "  {r}");
+            }
+        }
         s
     }
 }

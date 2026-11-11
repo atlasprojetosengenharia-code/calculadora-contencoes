@@ -189,6 +189,13 @@ pub fn gerar(res: &Resultado, titulo: &str, versao: &str) -> String {
     if aberto {
         h.push_str("</section>");
     }
+    if !res.referencias.is_empty() {
+        h.push_str(&format!(r#"<h2>{}. Referências bibliográficas</h2><section class="cartao">"#, n + 1));
+        for r in &res.referencias {
+            h.push_str(&format!(r#"<p class="txt" style="text-align:left">{}</p>"#, esc(r)));
+        }
+        h.push_str("</section>");
+    }
 
     h.push_str(
         "<footer>As caixas de referência normativa apresentam sínteses dos requisitos e não substituem o texto \

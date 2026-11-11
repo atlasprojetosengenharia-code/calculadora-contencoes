@@ -7,7 +7,7 @@
 # o verificador de atualizações do programa entende).
 #
 # Distribuição pública sem expor o código:
-#   - o código fica neste repositório PRIVADO;
+#   - o código fica neste repositório (público apenas para consulta, licença proprietária);
 #   - a release (somente o .zip) é publicada no repositório PÚBLICO
 #     definido em REPO_PUBLICO, usando o segredo RELEASES_TOKEN
 #     (token fine-grained com "Contents: read and write" só naquele repositório).

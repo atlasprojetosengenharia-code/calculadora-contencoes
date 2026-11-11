@@ -137,7 +137,8 @@ fn texto(r: &str) -> Option<&'static str> {
         "Perfil:" => "Perfil da estaca-prancha. Define o módulo resistente W e a capacidade à flexão.",
         "Módulo resistente W" => "Módulo de resistência do perfil por metro. Tensão = M/W, comparada a fy/γa1.",
         "Altura da viga de travamento" => "Altura da viga de coroamento/travamento das estacas. Distribui cargas e solidariza a parede.",
-        "fy do aço" => "Tensão de escoamento do perfil metálico (ex.: 270 a 355 MPa).",
+        "fy do aço" => "Tensão de escoamento do perfil metálico. O catálogo VPA não informa a classe do aço: confirme com o fornecedor (ex.: A572 Gr. 50 = 345 MPa ; A328 = 270 MPa).",
+        "Acréscimo construtivo de ficha" => "Comprimento somado à ficha de projeto (f·D0). Use quando a estabilidade global (círculos sob a ponta) ou a cravação em camada resistente exigir ficha maior. O otimizador também testa esse acréscimo.",
         "Diâmetro" => "Diâmetro das estacas. Aumenta a inércia e a capacidade à flexão; define a armadura longitudinal mínima.",
         "Espaçamento (eixo a eixo)" => "Distância entre estacas. Maior espaçamento → mais carga por estaca; vãos grandes \
             podem exigir revestimento entre estacas.",

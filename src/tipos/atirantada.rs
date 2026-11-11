@@ -379,8 +379,8 @@ impl CortinaAtirantada {
         }
         let t_max = tirantes.iter().map(|t| t.carga).fold(0.0, f64::max);
         r.verif(Verificacao::info("Carga de trabalho máxima Ft", t_max, "kN"));
-        // reforços para a estabilidade global (capacidades admissíveis)
-        let fsb = fat.fs_tirante_bulbo();
+        // reforços para a estabilidade global: resistências não minoradas (o FS global da
+        // NBR 11682 Tab. 3 é aplicado uma única vez, como na análise por cunhas)
         r.reforcos = tirantes
             .iter()
             .map(|t| crate::global::Reforco {
@@ -388,8 +388,8 @@ impl CortinaAtirantada {
                 dir: [incl.cos(), -incl.sin()],
                 comprimento: t.l_livre + t.l_bulbo,
                 livre: t.l_livre,
-                arr_por_m: PI * self.diam_furo * self.qs / (fsb * self.espac_h),
-                aco: t.t_adm / self.espac_h,
+                arr_por_m: PI * self.diam_furo * self.qs / self.espac_h,
+                aco: 0.9 * t.fyk * t.area / 10.0 / self.espac_h,
             })
             .collect();
         // Ensaios de recebimento — NBR 5629 Tabela D.1

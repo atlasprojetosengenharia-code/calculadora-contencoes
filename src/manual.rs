@@ -121,7 +121,12 @@ fn conteudo() -> Vec<B> {
            (permanente ou provisório, rosca ou clavete) — critérios da NBR 5629."),
         Sec("Estaca-prancha e parede de estacas"),
         I("Condição de apoio (balanço ou apoiada), profundidade e inclinação do apoio, δ no lado passivo."),
-        I("Estaca-prancha: módulo resistente W e fy do aço. Parede de estacas: diâmetro e espaçamento eixo a eixo."),
+        I("Estaca-prancha: perfil escolhido no catálogo VPA (aço U, Z e W perfilados a frio, com W, inércia e peso; ou PVC VANIL®, \
+           verificado pelo momento admissível do fabricante), aço do perfil (fy) e acréscimo construtivo de ficha. \
+           Parede de estacas: diâmetro e espaçamento eixo a eixo."),
+        I("Otimizar — avalia as alternativas usuais do tipo de contenção (base, dente, embutimento, níveis de tirantes, \
+           malha e barras dos grampos, apoio, ficha e perfil), ajusta espessuras e placas e aplica a mais econômica que \
+           atende a todas as verificações, inclusive a estabilidade global. Roda em segundo plano."),
         I("Altura da viga de travamento / chapéu e NA no lado escavado, quando houver."),
         Sec("Solo grampeado"),
         I("Inclinação da face, espaçamentos horizontal Sh e vertical Sv, profundidade do 1º grampo."),

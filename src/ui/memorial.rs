@@ -183,4 +183,12 @@ pub fn mostrar(ui: &mut egui::Ui, res: &Resultado) {
             Bloco::Verif(i) => verificacao(ui, &res.verificacoes[*i], &p),
         }
     }
+    if !res.referencias.is_empty() {
+        ui.add_space(10.0);
+        titulo(ui, "Referências bibliográficas");
+        for r in &res.referencias {
+            ui.add(Label::new(RichText::new(r).color(p.texto)).wrap());
+            ui.add_space(3.0);
+        }
+    }
 }

@@ -126,7 +126,6 @@ pub fn mostrar(ctx: &egui::Context, sessao_anterior: Option<&str>, atualizacao: 
             });
             ui.add_space(16.0);
             ui.label(RichText::new(sobre::NORMAS.join("   ·   ")).small().color(p.fraco));
-            ui.label(RichText::new(format!("{}   ·   {}", sobre::LINGUAGEM, sobre::LICENCA)).small().color(p.fraco));
         });
     });
     acao

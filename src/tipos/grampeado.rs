@@ -16,7 +16,7 @@ fn verdadeiro() -> bool {
 }
 
 /// Bitolas de barra de grampo (CA-50), em mm.
-const BARRAS_GRAMPO: [f64; 4] = [16.0, 20.0, 25.0, 32.0];
+pub const BARRAS_GRAMPO: [f64; 4] = [16.0, 20.0, 25.0, 32.0];
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SoloGrampeado {
@@ -299,9 +299,10 @@ impl SoloGrampeado {
             );
         }
 
-        // reforços para a estabilidade global (capacidades admissíveis)
+        // reforços para a estabilidade global: resistências não minoradas (o FS global da
+        // NBR 11682 Tab. 3 é aplicado uma única vez, como na análise por cunhas)
         {
-            let (eta, inc, fsg) = (rad(self.incl_face), rad(self.incl_grampo), fat.fs_grampo_interna);
+            let (eta, inc) = (rad(self.incl_face), rad(self.incl_grampo));
             r.reforcos = zs
                 .iter()
                 .map(|&z| {
@@ -311,8 +312,8 @@ impl SoloGrampeado {
                         dir: [inc.cos(), -inc.sin()],
                         comprimento: self.comprimento,
                         livre: 0.0,
-                        arr_por_m: PI * self.diam_furo * self.qs / (fsg * self.sh),
-                        aco: rt / fsg / self.sh,
+                        arr_por_m: PI * self.diam_furo * self.qs / self.sh,
+                        aco: rt / self.sh,
                     }
                 })
                 .collect();

@@ -273,7 +273,9 @@ impl Modelo {
         };
         let (cx0, cx1) = self.centros_x;
         let (ya, yb) = (self.y_topo + 0.1 * self.esc, self.y_topo + 2.5 * self.esc);
-        let (nx, ny) = (12, 9);
+        // passo da grade proporcional à escala (domínios largos, p. ex. grampos longos, não perdem resolução)
+        let nx = (((cx1 - cx0) / (0.2 * self.esc)).ceil() as usize).clamp(12, 30);
+        let ny = 9;
         // fase 1: grade de centros e cotas de fundo; guarda os melhores candidatos
         let mut candidatos: Vec<Circulo> = Vec::new();
         for i in 0..nx {
@@ -480,7 +482,8 @@ impl Projeto {
                 let g = self.preparar_grampeado();
                 let h = g.h;
                 let x_ft = h * g.incl_face.to_radians().tan();
-                let alc = 2.5 * h + 2.0;
+                // o domínio precisa conter os grampos inteiros e os círculos que passam atrás deles
+                let alc = (2.5 * h + 2.0).max(1.2 * g.comprimento + 1.5 * h);
                 let sup_y = |x: f64| h + (x - x_ft).max(0.0) * beta;
                 m.sup = vec![[-alc, 0.0], [0.0, 0.0], [x_ft, h], [alc + x_ft, sup_y(alc + x_ft)]];
                 m.y_ref = h;
