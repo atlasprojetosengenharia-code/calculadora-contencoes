@@ -16,6 +16,12 @@ pub const DIAM_MIN_BARBACA_MM: f64 = 75.0;
 pub const DIAM_USUAL_MAX_MM: f64 = 100.0;
 pub const ESP_MAX_MALHA: f64 = 2.0;
 pub const ESP_MIN_FILTRO: f64 = 0.30;
+/// Barbacã: entrada no maciço (coleta) e saída além da face (pingadeira), m.
+pub const BARBACA_ENTRADA: f64 = 0.20;
+pub const BARBACA_SAIDA: f64 = 0.15;
+/// Bolsa drenante de brita envolta em geotêxtil na entrada de cada barbacã: lado da seção e extensão ao longo da contenção (m).
+pub const BOLSA_LADO: f64 = 0.30;
+pub const BOLSA_COMP: f64 = 0.40;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -270,6 +276,22 @@ impl Drenagem {
         v
     }
 
+    /// Quantitativos das bolsas de brita + geotêxtil (nos barbacãs) e do envelope do dreno de pé.
+    pub fn relatar_bolsas(&self, r: &mut Resultado, filas: usize, pe: bool) {
+        let l = BOLSA_LADO.max(self.esp_filtro.min(0.5));
+        let por_m = filas as f64 / self.esp_h.max(0.1);
+        let v_bolsas = por_m * l * l * BOLSA_COMP;
+        let v_pe = if pe { l * l } else { 0.0 };
+        let a_geo = por_m * (4.0 * l * BOLSA_COMP + 2.0 * l * l) + if pe { 4.0 * l } else { 0.0 };
+        r.formula(
+            "Bolsas drenantes de brita envoltas em geotêxtil",
+            "uma bolsa l × l × c na entrada de cada barbacã ;  V = (n/m)·l²·c + l² (dreno de pé)",
+            format!("l = {} m ;  c = {} m ;  n/m = {} ;  dreno de pé: {}", fmt(l), fmt(BOLSA_COMP), fmt(por_m), if pe { "envelope l × l contínuo" } else { "não" }),
+            format!("V = {} m³/m de brita ;  geotêxtil ≈ {} m²/m", fmt(v_bolsas + v_pe), fmt(a_geo)),
+        );
+        r.linha("A brita com geotêxtil fica só onde há tubos (bolsas nos barbacãs e envelope do dreno de pé); o restante do tardoz é reaterro compactado.");
+    }
+
     /// Faixa de filtro paralela ao tardoz, do ponto `p0` (inferior) ao `p1`
     /// (superior), com espessura medida em +x (lado do maciço).
     pub fn faixa_filtro(&self, d: &mut Desenho, p0: [f64; 2], p1: [f64; 2]) {
@@ -395,7 +417,7 @@ impl Drenagem {
                 "Δh = L·i",
                 format!("Δh = {} m·{} %", fmt(l_max), fmt(self.declividade)),
                 format!(
-                    "Δh = {} cm na fila mais longa (saída livre na face; extremidade interna protegida com geotêxtil)",
+                    "Δh = {} cm no tubo mais longo (entra 20 cm no maciço e sai 15 cm da face, como pingadeira; entrada envolvida por bolsa de brita e geotêxtil)",
                     fmt(l_max * self.declividade)
                 ),
             );

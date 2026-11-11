@@ -222,6 +222,8 @@ pub struct Desenho {
     pub textos: Vec<Texto>,
     /// Setas de carga: (origem, destino).
     pub setas: Vec<([f64; 2], [f64; 2])>,
+    /// Regiões (convexas) que a hachura do solo não atravessa: canaletas, filtros, bolsas drenantes.
+    pub vazios: Vec<Vec<[f64; 2]>>,
 }
 
 impl Desenho {
@@ -291,10 +293,25 @@ impl Desenho {
         while c < mx {
             let o = [c * u[0], c * u[1]];
             if let Some((t0, t1)) = recorta_convexo(pts, o, d) {
-                self.linha(
-                    Estilo::Hachura,
-                    vec![[o[0] + t0 * d[0], o[1] + t0 * d[1]], [o[0] + t1 * d[0], o[1] + t1 * d[1]]],
-                );
+                // subtrai os vazios (canaletas, filtros, bolsas) do segmento
+                let mut trechos = vec![(t0, t1)];
+                for v in &self.vazios {
+                    if let Some((a, b)) = recorta_convexo(v, o, d) {
+                        trechos = trechos
+                            .into_iter()
+                            .flat_map(|(s0, s1)| {
+                                let mut r = Vec::new();
+                                if a > s0 { r.push((s0, a.min(s1))); }
+                                if b < s1 { r.push((b.max(s0), s1)); }
+                                r
+                            })
+                            .filter(|(s0, s1)| s1 - s0 > 1e-6)
+                            .collect();
+                    }
+                }
+                for (s0, s1) in trechos {
+                    self.linha(Estilo::Hachura, vec![[o[0] + s0 * d[0], o[1] + s0 * d[1]], [o[0] + s1 * d[0], o[1] + s1 * d[1]]]);
+                }
             }
             c += esp;
         }
@@ -395,6 +412,11 @@ impl Desenho {
     pub fn canaleta(&mut self, xc: f64, y: f64) {
         let ext = vec![[xc - 0.15, y], [xc - 0.10, y - 0.25], [xc + 0.10, y - 0.25], [xc + 0.15, y]];
         let int = vec![[xc - 0.10, y], [xc - 0.075, y - 0.20], [xc + 0.075, y - 0.20], [xc + 0.10, y]];
+        // paredes e fundo preenchidos (convexos) e vazio na hachura do solo
+        self.poli(Estilo::Concreto, vec![ext[0], ext[1], int[1], int[0]]);
+        self.poli(Estilo::Concreto, vec![ext[1], ext[2], int[2], int[1]]);
+        self.poli(Estilo::Concreto, vec![int[3], int[2], ext[2], ext[3]]);
+        self.vazios.push(ext.clone());
         let mut e = ext.clone();
         e.push(ext[0]);
         self.linha(Estilo::Concreto, e);

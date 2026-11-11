@@ -22,10 +22,14 @@ pub enum Material {
     TiranteLivre,
     Bulbo,
     Grampo,
-    Terreno,
     Brita,
     Areia,
     Geocomposto,
+    SoloArgila,
+    SoloAreia,
+    SoloSilte,
+    SoloAterro,
+    Reaterro,
 }
 
 impl Material {
@@ -39,27 +43,57 @@ impl Material {
             Material::TiranteLivre => "Tirante — trecho livre",
             Material::Bulbo => "Calda de cimento — bulbo",
             Material::Grampo => "Grampo — barra e calda",
-            Material::Terreno => "Terreno",
             Material::Brita => "Brita envolta em geotêxtil",
             Material::Areia => "Areia grossa (filtro)",
             Material::Geocomposto => "Geocomposto drenante",
+            Material::SoloArgila => "Solo argiloso (corte)",
+            Material::SoloAreia => "Solo arenoso (corte)",
+            Material::SoloSilte => "Solo siltoso (corte)",
+            Material::SoloAterro => "Aterro existente",
+            Material::Reaterro => "Reaterro compactado",
         }
     }
     /// Cor RGB (0–1) e transparência (0 = opaco).
     pub fn cor(&self) -> ([f64; 3], f64) {
+        let c = match self {
+            Material::Concreto => [0.70, 0.70, 0.67],
+            Material::Pedra => [0.56, 0.51, 0.44],
+            Material::Gabiao => [0.52, 0.50, 0.47],
+            Material::Aco => [0.40, 0.44, 0.50],
+            Material::Pvc => [0.93, 0.93, 0.90],
+            Material::TiranteLivre => [0.20, 0.22, 0.25],
+            Material::Bulbo => [0.62, 0.62, 0.58],
+            Material::Grampo => [0.55, 0.30, 0.20],
+            Material::Brita => [0.58, 0.59, 0.60],
+            Material::Areia => [0.86, 0.77, 0.56],
+            Material::Geocomposto => [0.12, 0.12, 0.13],
+            Material::SoloArgila => [0.60, 0.32, 0.20],
+            Material::SoloAreia => [0.80, 0.68, 0.46],
+            Material::SoloSilte => [0.66, 0.53, 0.36],
+            Material::SoloAterro => [0.42, 0.33, 0.25],
+            Material::Reaterro => [0.55, 0.42, 0.29],
+        };
+        (c, 0.0)
+    }
+
+    /// Intensidade da variação de tom (textura) na renderização.
+    pub fn textura(&self) -> f64 {
         match self {
-            Material::Concreto => ([0.72, 0.72, 0.70], 0.0),
-            Material::Pedra => ([0.66, 0.58, 0.46], 0.0),
-            Material::Gabiao => ([0.60, 0.56, 0.50], 0.0),
-            Material::Aco => ([0.45, 0.52, 0.62], 0.0),
-            Material::Pvc => ([0.55, 0.70, 0.85], 0.0),
-            Material::TiranteLivre => ([0.95, 0.60, 0.15], 0.0),
-            Material::Bulbo => ([0.80, 0.35, 0.10], 0.0),
-            Material::Grampo => ([0.85, 0.20, 0.20], 0.0),
-            Material::Terreno => ([0.55, 0.47, 0.30], 0.55),
-            Material::Brita => ([0.50, 0.52, 0.55], 0.25),
-            Material::Areia => ([0.86, 0.78, 0.55], 0.25),
-            Material::Geocomposto => ([0.20, 0.35, 0.25], 0.0),
+            Material::Brita | Material::Gabiao => 0.30,
+            Material::Pedra => 0.22,
+            Material::SoloArgila | Material::SoloAreia | Material::SoloSilte | Material::SoloAterro | Material::Reaterro | Material::Areia => 0.10,
+            Material::Concreto | Material::Bulbo => 0.04,
+            _ => 0.0,
+        }
+    }
+
+    /// Tamanho do grão da textura (m).
+    pub fn grao(&self) -> f64 {
+        match self {
+            Material::Brita => 0.05,
+            Material::Gabiao | Material::Pedra => 0.18,
+            Material::Areia => 0.04,
+            _ => 0.25,
         }
     }
 }
@@ -95,8 +129,6 @@ pub enum Forma {
     Vertical { planta: Vec<[f64; 2]>, y0: f64, y1: f64 },
     /// Barra cilíndrica de p0 a p1.
     Barra { p0: [f64; 3], p1: [f64; 3], diam: f64 },
-    /// Superfície do terreno: polilinha (x, y) estendida de z0 a z1.
-    Superficie { linha: Vec<[f64; 2]>, z0: f64, z1: f64 },
     /// Malha já triangulada (peças orientadas, como placas).
     Malha(Vec<Tri>),
 }
@@ -237,15 +269,6 @@ impl Forma {
                 v
             }
             Forma::Malha(t) => t.clone(),
-            Forma::Superficie { linha, z0, z1 } => {
-                let mut v = Vec::new();
-                for s in linha.windows(2) {
-                    let (a, b) = (s[0], s[1]);
-                    v.push([pt(a[0], a[1], *z0), pt(b[0], b[1], *z0), pt(b[0], b[1], *z1)]);
-                    v.push([pt(a[0], a[1], *z0), pt(b[0], b[1], *z1), pt(a[0], a[1], *z1)]);
-                }
-                v
-            }
         }
     }
 }
@@ -327,7 +350,8 @@ fn perfil_prancha(forma: FormaPerfil, b: f64, h: f64, t: f64, l: f64, x0: f64) -
 
 impl Modelo3d {
     /// Monta o modelo do projeto num trecho de comprimento `l` (m).
-    pub fn montar(p: &Projeto, r: &Resultado, l: f64) -> Self {
+    /// `corte`: maciço só até a metade do trecho (vista em corte).
+    pub fn montar(p: &Projeto, r: &Resultado, l: f64, corte: bool) -> Self {
         let l = l.max(1.0);
         let m = p.secao_global(r);
         let mut md = Modelo3d { comprimento: l, ..Default::default() };
@@ -478,28 +502,151 @@ impl Modelo3d {
             }
         }
 
-        // terreno: superfície do cálculo, recortada em torno da estrutura
+        // maciço de solo: volumes opacos (camadas da sondagem e reaterro), sem
+        // atravessar as peças; com `corte`, vai só até a metade do trecho para
+        // mostrar o interior (reforços, drenagem e a face do corte)
         let folga = 0.8 * h.max(2.0);
         let (x0, x1) = (xmin - folga, xmax + folga);
-        let mut linha: Vec<[f64; 2]> = Vec::new();
-        let y_em = |x: f64| -> f64 {
+        let z_solo = if corte { 0.5 * l } else { l };
+        md.solos(p, &m, x0, x1, z_solo, l);
+        md
+    }
+
+    /// Volumes de solo por fatias verticais da seção, descontadas as peças.
+    fn solos(&mut self, p: &Projeto, m: &crate::global::Modelo, x0: f64, x1: f64, z1: f64, l: f64) {
+        let y_sup = |x: f64| -> f64 {
             for s in m.sup.windows(2) {
                 let (a, b) = (s[0], s[1]);
-                if (a[0] <= x && x <= b[0]) && (b[0] - a[0]).abs() > 1e-12 {
+                if a[0] <= x && x <= b[0] && (b[0] - a[0]).abs() > 1e-12 {
                     return a[1] + (b[1] - a[1]) * (x - a[0]) / (b[0] - a[0]);
                 }
             }
-            m.sup.last().map(|q| q[1]).unwrap_or(0.0)
+            if x < m.sup.first().map(|q| q[0]).unwrap_or(0.0) { m.sup[0][1] } else { m.sup.last().map(|q| q[1]).unwrap_or(0.0) }
         };
-        linha.push([x0, y_em(x0)]);
-        for q in &m.sup {
-            if q[0] > x0 && q[0] < x1 {
-                linha.push(*q);
+        // obstáculos: seções das peças contínuas e retângulos das paredes verticais
+        let mut obst: Vec<Vec<[f64; 2]>> = Vec::new();
+        for pc in &self.pecas {
+            match &pc.forma {
+                Forma::Extrusao { secao, z0, z1: zf } if *z0 < 1e-6 && (*zf - l).abs() < 1e-6 => obst.push(secao.clone()),
+                Forma::Vertical { planta, y0, y1 } => {
+                    let (a, b) = planta.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), q| (a.min(q[0]), b.max(q[0])));
+                    obst.push(vec![[a, *y0], [b, *y0], [b, *y1], [a, *y1]]);
+                }
+                _ => {}
             }
         }
-        linha.push([x1, y_em(x1)]);
-        md.pecas.push(Peca { nome: "Terreno".into(), classe: Classe::Terreno, material: Material::Terreno, forma: Forma::Superficie { linha, z0: 0.0, z1: l } });
-        md
+        let y_min = obst.iter().flatten().map(|q| q[1]).fold(m.y_fundo, f64::min);
+        let y_fundo = y_min - 1.0;
+        // intervalo vertical ocupado por um polígono na abscissa x
+        let intervalo = |poly: &[[f64; 2]], x: f64| -> Option<(f64, f64)> {
+            let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+            for i in 0..poly.len() {
+                let (a, b) = (poly[i], poly[(i + 1) % poly.len()]);
+                if (a[0] - x) * (b[0] - x) <= 0.0 && (b[0] - a[0]).abs() > 1e-12 {
+                    let y = a[1] + (b[1] - a[1]) * (x - a[0]) / (b[0] - a[0]);
+                    lo = lo.min(y);
+                    hi = hi.max(y);
+                }
+            }
+            (hi > lo).then_some((lo, hi))
+        };
+        // abscissas de quebra
+        let mut xs = vec![x0, x1];
+        for q in m.sup.iter().chain(obst.iter().flatten()).chain(m.reaterro.iter().flatten()) {
+            if q[0] > x0 && q[0] < x1 {
+                xs.push(q[0]);
+            }
+        }
+        xs.sort_by(|a, b| a.total_cmp(b));
+        xs.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
+        // camadas da sondagem (profundidade a partir de y_ref)
+        let camadas = p.sondagem.camadas_calc();
+        let mut cortes: Vec<f64> = camadas.iter().map(|c| m.y_ref - c.ate).filter(|y| *y > y_fundo).collect();
+        cortes.push(f64::INFINITY);
+        cortes.push(y_fundo);
+        cortes.sort_by(|a, b| a.total_cmp(b));
+        let material_em = |x: f64, y: f64| -> (Material, String) {
+            if m.reaterro.iter().any(|r| intervalo(r, x).is_some_and(|(a, b)| y >= a && y <= b)) {
+                return (Material::Reaterro, "Reaterro compactado".into());
+            }
+            match p.sondagem.camada_em((m.y_ref - y).max(0.0)) {
+                Some(c) => {
+                    let d = c.descricao.to_lowercase();
+                    let t = format!("{:?}", c.tipo);
+                    let mat = if d.contains("aterro") {
+                        Material::SoloAterro
+                    } else if t.starts_with("Areia") {
+                        Material::SoloAreia
+                    } else if t.starts_with("Silte") {
+                        Material::SoloSilte
+                    } else {
+                        Material::SoloArgila
+                    };
+                    (mat, format!("Solo natural — {}", c.descricao))
+                }
+                None => (Material::SoloArgila, "Solo natural".into()),
+            }
+        };
+        let mut baldes: Vec<(Material, String, Vec<Tri>)> = Vec::new();
+        for w in xs.windows(2) {
+            let (xa, xb) = (w[0], w[1]);
+            if xb - xa < 1e-6 {
+                continue;
+            }
+            let (ea, eb, xm) = (xa + 1e-7, xb - 1e-7, 0.5 * (xa + xb));
+            // coluna de solo nas duas bordas, menos os obstáculos (topologia pelo meio da faixa)
+            let mut col = vec![(y_fundo, y_sup(ea), y_fundo, y_sup(eb))];
+            let mut ocup: Vec<(f64, f64, f64, f64, f64)> = obst
+                .iter()
+                .filter_map(|o| {
+                    let (lm, _) = intervalo(o, xm)?;
+                    let (la, ha) = intervalo(o, ea).or(intervalo(o, xm))?;
+                    let (lb, hb) = intervalo(o, eb).or(intervalo(o, xm))?;
+                    Some((lm, la, ha, lb, hb))
+                })
+                .collect();
+            ocup.sort_by(|a, b| a.0.total_cmp(&b.0));
+            for (_, la, ha, lb, hb) in ocup {
+                col = col
+                    .into_iter()
+                    .flat_map(|(a0, a1, b0, b1)| {
+                        let mut r = Vec::new();
+                        if la > a0 + 1e-6 || lb > b0 + 1e-6 {
+                            r.push((a0, la.min(a1), b0, lb.min(b1)));
+                        }
+                        if ha < a1 - 1e-6 || hb < b1 - 1e-6 {
+                            r.push((ha.max(a0), a1, hb.max(b0), b1));
+                        }
+                        r
+                    })
+                    .collect();
+            }
+            for (a0, a1, b0, b1) in col {
+                for k in cortes.windows(2) {
+                    let (c0, c1) = (k[0], k[1]);
+                    let (pa0, pa1) = (a0.max(c0), a1.min(c1));
+                    let (pb0, pb1) = (b0.max(c0), b1.min(c1));
+                    if pa1 - pa0 < 1e-4 && pb1 - pb0 < 1e-4 {
+                        continue;
+                    }
+                    let mut secao = vec![[xa, pa0.min(pa1)], [xb, pb0.min(pb1)], [xb, pb1], [xa, pa1]];
+                    secao.dedup_by(|u, v| (u[0] - v[0]).abs() < 1e-9 && (u[1] - v[1]).abs() < 1e-5);
+                    if secao.len() < 3 {
+                        continue;
+                    }
+                    let ym = 0.25 * (pa0 + pa1 + pb0 + pb1);
+                    let (mat, nome) = material_em(xm, ym);
+                    let tris = prisma(&secao, |q| pt(q[0], q[1], 0.0), |q| pt(q[0], q[1], z1));
+                    match baldes.iter_mut().find(|(mm, n, _)| *mm == mat && *n == nome) {
+                        Some((_, _, v)) => v.extend(tris),
+                        None => baldes.push((mat, nome, tris)),
+                    }
+                }
+            }
+        }
+        for (material, nome, tris) in baldes {
+            self.pecas.push(Peca { nome, classe: Classe::Terreno, material, forma: Forma::Malha(tris) });
+        }
     }
 
     /// Tirantes/estroncas de paredes embutidas ancoradas (comprimento indicativo).
@@ -570,12 +717,9 @@ impl Modelo3d {
         let dr = &p.drenagem;
         let gd = p.geo_drenagem();
         let d_barb = (dr.diam_barbaca_mm / 1000.0).max(0.04);
+        let bolsa_c = crate::drenagem::BOLSA_COMP;
         for (i, (t, f)) in gd.barbacas.iter().enumerate() {
-            // prolonga 5 cm para dentro do filtro e 5 cm para fora da face
-            let (dx, dy) = (f[0] - t[0], f[1] - t[1]);
-            let n = (dx * dx + dy * dy).sqrt().max(1e-6);
-            let a = [t[0] - 0.05 * dx / n, t[1] - 0.05 * dy / n];
-            let b = [f[0] + 0.05 * dx / n, f[1] + 0.05 * dy / n];
+            // o tubo já entra 20 cm no maciço e sai 15 cm da face (geo_drenagem)
             let desl = if i % 2 == 1 { dr.esp_h / 2.0 } else { 0.0 };
             for z in posicoes(l, dr.esp_h) {
                 let z = z + desl;
@@ -586,16 +730,24 @@ impl Modelo3d {
                     nome: format!("Barbacã PVC Ø{} mm — fila {}", fmt0(dr.diam_barbaca_mm), i + 1),
                     classe: Classe::Tubo,
                     material: Material::Pvc,
-                    forma: Forma::Barra { p0: pt(a[0], a[1], z), p1: pt(b[0], b[1], z), diam: d_barb },
+                    forma: Forma::Barra { p0: pt(t[0], t[1], z), p1: pt(f[0], f[1], z), diam: d_barb },
                 });
+                // bolsa de brita envolta em geotêxtil na entrada do tubo
+                if let Some(b) = gd.bolsas.get(i) {
+                    self.pecas.push(Peca {
+                        nome: format!("Bolsa drenante de brita + geotêxtil — fila {}", i + 1),
+                        classe: Classe::Filtro,
+                        material: Material::Brita,
+                        forma: Forma::Extrusao { secao: b.to_vec(), z0: (z - bolsa_c / 2.0).max(0.0), z1: (z + bolsa_c / 2.0).min(l) },
+                    });
+                }
             }
         }
-        if let Some((p0, p1)) = gd.filtro {
+        if let (Some((p0, p1)), true) = (gd.filtro, gd.filtro_continuo) {
             let e = dr.esp_filtro.max(0.02);
             let (mat, nome) = match dr.material_filtro {
-                crate::drenagem::MaterialFiltro::AreiaGrossa => (Material::Areia, "Filtro de areia grossa"),
-                crate::drenagem::MaterialFiltro::BritaGeotextil => (Material::Brita, "Dreno de brita envolto em geotêxtil"),
                 crate::drenagem::MaterialFiltro::Geocomposto => (Material::Geocomposto, "Geocomposto drenante"),
+                _ => (Material::Areia, "Filtro de areia grossa"),
             };
             self.pecas.push(Peca {
                 nome: format!("{nome} junto ao tardoz (e = {} cm)", fmt0(100.0 * e)),
@@ -603,9 +755,23 @@ impl Modelo3d {
                 material: mat,
                 forma: Forma::Extrusao { secao: vec![p0, [p0[0] + e, p0[1]], [p1[0] + e, p1[1]], p1], z0: 0.0, z1: l },
             });
-            if dr.dreno_pe {
-                let dpe = (dr.diam_dreno_pe_mm / 1000.0).max(0.06);
-                let (x, y) = (p0[0] + e / 2.0, p0[1] + dpe * 0.7);
+        }
+        if dr.dreno_pe {
+            let dpe = (dr.diam_dreno_pe_mm / 1000.0).max(0.06);
+            let centro = match (gd.envelope_pe, gd.filtro) {
+                (Some(env), _) => {
+                    self.pecas.push(Peca {
+                        nome: "Envelope de brita + geotêxtil do dreno de pé".into(),
+                        classe: Classe::Filtro,
+                        material: Material::Brita,
+                        forma: Forma::Extrusao { secao: env.to_vec(), z0: 0.0, z1: l },
+                    });
+                    Some([(env[0][0] + env[1][0]) / 2.0, (env[0][1] + env[2][1]) / 2.0])
+                }
+                (None, Some((p0, _))) if gd.filtro_continuo => Some([p0[0] + dr.esp_filtro / 2.0, p0[1] + dpe * 0.7]),
+                _ => None,
+            };
+            if let Some([x, y]) = centro {
                 self.pecas.push(Peca {
                     nome: format!("Dreno de pé — tubo perfurado Ø{} mm", fmt0(dr.diam_dreno_pe_mm)),
                     classe: Classe::Tubo,
@@ -677,7 +843,7 @@ mod testes {
             p.geometria.h = 4.0;
             p.pre_dimensionar();
             let r = p.calcular();
-            let m = Modelo3d::montar(&p, &r, 10.0);
+            let m = Modelo3d::montar(&p, &r, 10.0, false);
             assert!(m.pecas.iter().any(|x| x.classe != Classe::Terreno), "{}", tipo.nome());
             assert!(m.pecas.iter().any(|x| x.classe == Classe::Terreno));
             for pc in &m.pecas {

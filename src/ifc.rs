@@ -233,7 +233,7 @@ mod testes {
             p.geometria.h = 4.0;
             p.pre_dimensionar();
             let r = p.calcular();
-            let m = Modelo3d::montar(&p, &r, 6.0);
+            let m = Modelo3d::montar(&p, &r, 6.0, false);
             let s = gerar(&m, &p);
             assert!(s.starts_with("ISO-10303-21;") && s.trim_end().ends_with("END-ISO-10303-21;"));
             assert!(s.contains("FILE_SCHEMA(('IFC4'))"));

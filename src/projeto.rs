@@ -780,10 +780,17 @@ impl Projeto {
         let dr = &self.drenagem;
         let mut gd = GeoDrenagem::default();
         let tb = rad(self.geometria.beta).tan();
+        use crate::drenagem::{BARBACA_ENTRADA, BARBACA_SAIDA};
+        // barbacã: do tardoz (xt) à face (xf), com caimento para fora; o tubo entra
+        // 20 cm no maciço (coleta) e sai 15 cm da face (pingadeira: a água não escorre no paramento)
         let barb = |gd: &mut GeoDrenagem, xt: f64, xf: f64, y: f64| {
-            let queda = (xt - xf).abs() * dr.declividade / 100.0;
-            gd.barbacas.push(([xt, y], [xf, y - queda]));
-            gd.larguras.push((xt - xf).abs());
+            let i = dr.declividade / 100.0;
+            let s = if xt >= xf { 1.0 } else { -1.0 };
+            let t = [xt + s * BARBACA_ENTRADA, y + i * BARBACA_ENTRADA];
+            let f = [xf - s * BARBACA_SAIDA, y - i * ((xt - xf).abs() + BARBACA_SAIDA)];
+            gd.barbacas.push((t, f));
+            gd.larguras.push((t[0] - f[0]).abs());
+            gd.paredes.push(([xt, y], [xf, y - i * (xt - xf).abs()]));
         };
         match self.tipo {
             TipoContencao::Gravidade => {
@@ -877,6 +884,22 @@ impl Projeto {
         if !dr.filtro {
             gd.filtro = None;
         }
+        // brita + geotêxtil: bolsas drenantes só nos barbacãs e envelope no dreno de pé
+        if dr.material_filtro == crate::drenagem::MaterialFiltro::BritaGeotextil {
+            gd.filtro_continuo = false;
+            let l = crate::drenagem::BOLSA_LADO.max(dr.esp_filtro.min(0.5));
+            if dr.filtro {
+                for (t, _) in gd.paredes.clone() {
+                    gd.bolsas.push([[t[0], t[1] - l / 2.0], [t[0] + l, t[1] - l / 2.0], [t[0] + l, t[1] + l / 2.0], [t[0], t[1] + l / 2.0]]);
+                }
+            }
+            if let (Some((p0, _)), true) = (gd.filtro, dr.dreno_pe) {
+                gd.envelope_pe = Some([p0, [p0[0] + l, p0[1]], [p0[0] + l, p0[1] + l], [p0[0], p0[1] + l]]);
+            }
+            gd.altura_filtro = 0.0;
+        } else {
+            gd.filtro_continuo = gd.filtro.is_some();
+        }
         gd
     }
 
@@ -887,8 +910,19 @@ impl Projeto {
         for (t, f) in &gd.barbacas {
             d.linha(crate::resultado::Estilo::Barbaca, vec![*t, *f]);
         }
-        if let Some((p0, p1)) = gd.filtro {
+        if let (Some((p0, p1)), true) = (gd.filtro, gd.filtro_continuo) {
+            let e = dr.esp_filtro;
+            d.vazios.push(vec![p0, [p0[0] + e, p0[1]], [p1[0] + e, p1[1]], p1]);
             dr.faixa_filtro(d, p0, p1);
+        }
+        for b in gd.bolsas.iter().chain(gd.envelope_pe.iter()) {
+            d.vazios.push(b.to_vec());
+            d.poli(crate::resultado::Estilo::Dreno, b.to_vec());
+            d.pedras(&b.to_vec(), 0.08);
+        }
+        if let Some(e) = gd.envelope_pe {
+            let r = (dr.diam_dreno_pe_mm / 1000.0).max(0.06) / 2.0;
+            d.circulo(crate::resultado::Estilo::Barbaca, [(e[0][0] + e[1][0]) / 2.0, (e[0][1] + e[2][1]) / 2.0], r);
         }
         for c in &gd.canaletas {
             d.canaleta(c[0], c[1]);
@@ -897,6 +931,9 @@ impl Projeto {
             d.tracejada(crate::resultado::Estilo::Barbaca, vec![*a, *b]);
         }
         dr.relatar(r, self.altura_contida(), &gd.larguras, gd.altura_filtro, self.tipo);
+        if !gd.bolsas.is_empty() || gd.envelope_pe.is_some() {
+            dr.relatar_bolsas(r, gd.bolsas.len(), gd.envelope_pe.is_some());
+        }
     }
 }
 
@@ -911,8 +948,17 @@ pub struct GeoDrenagem {
     pub canaletas: Vec<[f64; 2]>,
     /// Drenos horizontais profundos: início e fim.
     pub dhp: Vec<([f64; 2], [f64; 2])>,
+    /// Comprimento de cada barbacã (tubo inteiro, com entrada e saída).
     pub larguras: Vec<f64>,
     pub altura_filtro: f64,
+    /// Trecho do barbacã dentro da parede (tardoz, face).
+    pub paredes: Vec<([f64; 2], [f64; 2])>,
+    /// Camada drenante contínua (areia ou geocomposto) em toda a altura.
+    pub filtro_continuo: bool,
+    /// Bolsas de brita envoltas em geotêxtil na entrada de cada barbacã (seção).
+    pub bolsas: Vec<[[f64; 2]; 4]>,
+    /// Envelope de brita + geotêxtil do dreno de pé (seção).
+    pub envelope_pe: Option<[[f64; 2]; 4]>,
 }
 
 #[cfg(test)]
@@ -1371,5 +1417,38 @@ mod testes_varredura {
             }
         }
         assert_eq!(casos, 6 * 4 * 3);
+    }
+}
+
+#[cfg(test)]
+mod testes_drenagem_geo {
+    use super::*;
+    use crate::drenagem::{MaterialFiltro, BARBACA_ENTRADA, BARBACA_SAIDA};
+
+    #[test]
+    fn barbacas_saem_15_cm_e_entram_20_cm_em_todos_os_tipos() {
+        for tipo in TIPOS_CONTENCAO {
+            let mut p = Projeto::default();
+            p.tipo = tipo;
+            p.geometria.h = 4.0;
+            p.pre_dimensionar();
+            let gd = p.geo_drenagem();
+            for ((t, f), (pt, pf)) in gd.barbacas.iter().zip(&gd.paredes) {
+                assert!((t[0] - pt[0] - BARBACA_ENTRADA).abs() < 1e-9, "{}: entrada", tipo.nome());
+                assert!((pf[0] - f[0] - BARBACA_SAIDA).abs() < 1e-9, "{}: saída", tipo.nome());
+                assert!(f[1] < t[1], "{}: caimento para fora", tipo.nome());
+            }
+            if matches!(tipo, TipoContencao::Prancha | TipoContencao::Estacas) {
+                continue;
+            }
+            assert!(!gd.barbacas.is_empty(), "{}", tipo.nome());
+            // brita + geotêxtil (padrão): só bolsas nos barbacãs e envelope do dreno de pé
+            assert_eq!(p.drenagem.material_filtro, MaterialFiltro::BritaGeotextil);
+            assert!(!gd.filtro_continuo && gd.bolsas.len() == gd.barbacas.len() && gd.envelope_pe.is_some(), "{}", tipo.nome());
+            // areia: camada contínua
+            p.drenagem.material_filtro = MaterialFiltro::AreiaGrossa;
+            let gd = p.geo_drenagem();
+            assert!(gd.filtro_continuo && gd.bolsas.is_empty(), "{}", tipo.nome());
+        }
     }
 }
