@@ -10,7 +10,7 @@ pub const REPOSITORIO: &str = "atlasprojetosengenharia-code/calculadora-contenco
 
 pub fn versao_completa() -> String {
     match BUILD {
-        Some(b) => format!("{VERSAO} (build {b})"),
+        Some(_) => VERSAO.to_string(),
         None => format!("{VERSAO} (local)"),
     }
 }

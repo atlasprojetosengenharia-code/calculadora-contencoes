@@ -50,11 +50,7 @@ pub fn ler_versao(tag: &str) -> Option<(u64, u64, u64, u64)> {
 }
 
 pub fn versao_atual() -> (u64, u64, u64, u64) {
-    let tag = match sobre::BUILD {
-        Some(b) => format!("{}-build.{b}", sobre::VERSAO),
-        None => sobre::VERSAO.to_string(),
-    };
-    ler_versao(&tag).unwrap_or((0, 0, 0, 0))
+    ler_versao(sobre::VERSAO).unwrap_or((0, 0, 0, 0))
 }
 
 fn consultar() -> Estado {

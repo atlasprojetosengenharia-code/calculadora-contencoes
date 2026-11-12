@@ -63,8 +63,8 @@ jobs:
         shell: pwsh
         run: |
           $v = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
-          $tag = "v$v-build.${{ github.run_number }}"
-          $nome = "CalculadoraContencoes_v$v-build.${{ github.run_number }}"
+          $tag = "v$v"
+          $nome = "CalculadoraContencoes_v$v"
           $pasta = "dist/$nome"
           New-Item -ItemType Directory -Force "$pasta/exemplos" | Out-Null
           Copy-Item target/release/calculadora_contencoes.exe "$pasta/CalculadoraContencoes.exe"
@@ -83,7 +83,7 @@ jobs:
           token: ${{ secrets.RELEASES_TOKEN }}
           tag_name: ${{ env.TAG }}
           target_commitish: main
-          name: Calculadora de Contenções ${{ env.VERSAO }} (build ${{ github.run_number }})
+          name: Calculadora de Contenções ${{ env.VERSAO }}
           body: |
             Baixe o arquivo **.zip** abaixo, descompacte e execute `CalculadoraContencoes.exe` (Windows 10/11, 64 bits). Não requer instalação.
           files: ${{ env.ZIP }}
