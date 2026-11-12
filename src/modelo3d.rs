@@ -676,6 +676,8 @@ impl Modelo3d {
         // recorte pelo contorno convexo: canal da calha (seção em U) e vãos ficam sem solo
         let obst: Vec<Vec<[f64; 2]>> = obst.iter().map(|o| envoltoria(o)).collect();
         let y_min = obst.iter().flatten().map(|q| q[1]).fold(m.y_fundo, f64::min);
+        // o maciço desce além da ponta de todas as peças enterradas (inclusive estacas isoladas)
+        let y_min = self.pecas.iter().filter_map(|pc| match &pc.forma { Forma::Vertical { y0, .. } => Some(*y0), _ => None }).fold(y_min, f64::min);
         let y_fundo = y_min - 1.0;
         // intervalo vertical ocupado por um polígono na abscissa x
         let intervalo = |poly: &[[f64; 2]], x: f64| -> Option<(f64, f64)> {

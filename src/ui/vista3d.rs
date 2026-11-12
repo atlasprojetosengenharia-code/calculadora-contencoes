@@ -121,6 +121,7 @@ impl Cena {
     }
 
     /// Rasteriza a cena (z-buffer, contornos nas arestas das peças) numa imagem `w × h`.
+    /// A imagem é dividida em faixas horizontais processadas em paralelo.
     fn rasterizar(&self, w: usize, h: usize, cam: &Camera, fundo: Color32, escala: f32) -> egui::ColorImage {
         let (sa, ca) = cam.azimute.sin_cos();
         let (se, ce) = cam.elevacao.sin_cos();
@@ -129,12 +130,20 @@ impl Cena {
         let foco = 0.5 * (w.min(h) as f32) * 3.4 * cam.zoom;
         let (cx, cy) = (w as f32 / 2.0, h as f32 / 2.0);
         let c0 = self.centro;
-        // passagem adiada: guarda o triângulo e as coordenadas baricêntricas (corrigidas
-        // pela perspectiva) e só depois colore cada pixel visível uma vez
-        let mut tri_px = vec![u32::MAX; w * h];
-        let mut bar = vec![[0.0f32; 2]; w * h];
-        let mut prof = vec![0.0f32; w * h]; // 1/d (maior = mais perto)
-        let mut id = vec![0u32; w * h];
+
+        // 1) projeção (uma vez): vértices na tela, 1/d e caixa envolvente
+        struct Proj {
+            p: [[f32; 3]; 3],
+            it: u32,
+            peca: u32,
+            vies: f32,
+            inv: f32,
+            y0: usize,
+            y1: usize,
+            x0: usize,
+            x1: usize,
+        }
+        let mut projs: Vec<Proj> = Vec::with_capacity(self.tris.len());
         for (it, t) in self.tris.iter().enumerate() {
             if (t.classe == Classe::Terreno && !cam.terreno)
                 || (matches!(t.classe, Classe::Tirante | Classe::Grampo | Classe::Placa | Classe::Cabeca) && !cam.reforcos)
@@ -142,7 +151,6 @@ impl Cena {
             {
                 continue;
             }
-            // vértices na tela (x, y) e 1/d
             let mut p = [[0.0f32; 3]; 3];
             let mut atras = false;
             for k in 0..3 {
@@ -161,102 +169,140 @@ impl Cena {
             if atras {
                 continue;
             }
-            // o solo recua um pouco: peças encostadas nele não "brigam" pelo pixel
-            let vies = if t.classe == Classe::Terreno { 0.9995 } else { 1.0 };
             let area = (p[1][0] - p[0][0]) * (p[2][1] - p[0][1]) - (p[1][1] - p[0][1]) * (p[2][0] - p[0][0]);
             if area.abs() < 1e-6 {
                 continue;
             }
-            let x0 = p.iter().map(|q| q[0]).fold(f32::INFINITY, f32::min).floor().max(0.0) as usize;
-            let x1 = (p.iter().map(|q| q[0]).fold(f32::NEG_INFINITY, f32::max).ceil() as isize).min(w as isize - 1);
-            let y0 = p.iter().map(|q| q[1]).fold(f32::INFINITY, f32::min).floor().max(0.0) as usize;
-            let y1 = (p.iter().map(|q| q[1]).fold(f32::NEG_INFINITY, f32::max).ceil() as isize).min(h as isize - 1);
-            if x1 < 0 || y1 < 0 {
+            let (mnx, mxx) = (p[0][0].min(p[1][0]).min(p[2][0]), p[0][0].max(p[1][0]).max(p[2][0]));
+            let (mny, mxy) = (p[0][1].min(p[1][1]).min(p[2][1]), p[0][1].max(p[1][1]).max(p[2][1]));
+            if mxx < 0.0 || mxy < 0.0 || mnx >= w as f32 || mny >= h as f32 {
                 continue;
             }
-            let inv = 1.0 / area;
-            for yy in y0..=y1 as usize {
-                let py = yy as f32 + 0.5;
-                for xx in x0..=x1 as usize {
-                    let px = xx as f32 + 0.5;
-                    let w0 = ((p[1][0] - px) * (p[2][1] - py) - (p[1][1] - py) * (p[2][0] - px)) * inv;
-                    let w1 = ((p[2][0] - px) * (p[0][1] - py) - (p[2][1] - py) * (p[0][0] - px)) * inv;
-                    let w2 = 1.0 - w0 - w1;
-                    if w0 < -1e-5 || w1 < -1e-5 || w2 < -1e-5 {
-                        continue;
-                    }
-                    let z = (w0 * p[0][2] + w1 * p[1][2] + w2 * p[2][2]) * vies;
-                    let i = yy * w + xx;
-                    if z > prof[i] {
-                        prof[i] = z;
-                        tri_px[i] = it as u32;
-                        bar[i] = [w0 * p[0][2] / z * vies, w1 * p[1][2] / z * vies];
-                        id[i] = t.peca;
-                    }
-                }
-            }
+            projs.push(Proj {
+                p,
+                it: it as u32,
+                peca: t.peca,
+                // o solo recua um pouco: peças encostadas nele não "brigam" pelo pixel
+                vies: if t.classe == Classe::Terreno { 0.9995 } else { 1.0 },
+                inv: 1.0 / area,
+                x0: mnx.floor().max(0.0) as usize,
+                x1: (mxx.ceil() as usize).min(w - 1),
+                y0: mny.floor().max(0.0) as usize,
+                y1: (mxy.ceil() as usize).min(h - 1),
+            });
         }
-        // contornos: troca de peça ou salto de profundidade entre vizinhos
-        let linha = (escala.round() as usize).max(1);
-        let cor: Vec<Color32> = (0..w * h)
-            .map(|i| {
-                let Some(t) = self.tris.get(tri_px[i] as usize) else { return fundo };
-                match t.tex {
-                    None => Color32::from_rgb(t.cor[0], t.cor[1], t.cor[2]),
-                    Some((tx, esc, eixo, tinta)) => {
-                        let [b0, b1] = bar[i];
-                        let b2 = 1.0 - b0 - b1;
-                        let pw = |k: usize| (b0 as f64 * t.v[0][k] + b1 as f64 * t.v[1][k] + b2 as f64 * t.v[2][k]) as f32;
-                        let (s, r) = match eixo { 0 => (pw(2), pw(1)), 1 => (pw(0), pw(2)), _ => (pw(0), pw(1)) };
-                        let c = super::texturas::amostrar(super::texturas::pixels(tx), s / esc, -r / esc);
-                        let q = |x: u8, k: f32| (x as f32 * k).clamp(0.0, 255.0) as u8;
-                        Color32::from_rgb(q(c[0], tinta[0]), q(c[1], tinta[1]), q(c[2], tinta[2]))
+
+        // 2) rasterização por faixas (z-buffer; guarda triângulo e baricêntricas)
+        let n_th = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(1, 16);
+        let faixa = h.div_ceil(n_th).max(1);
+        let mut tri_px = vec![u32::MAX; w * h];
+        let mut bar = vec![[0.0f32; 2]; w * h];
+        let mut prof = vec![0.0f32; w * h]; // 1/d (maior = mais perto)
+        let mut id = vec![0u32; w * h];
+        std::thread::scope(|sc| {
+            let partes = tri_px.chunks_mut(faixa * w).zip(bar.chunks_mut(faixa * w)).zip(prof.chunks_mut(faixa * w)).zip(id.chunks_mut(faixa * w));
+            for (k, (((tp, br), pf), idp)) in partes.enumerate() {
+                let projs = &projs;
+                sc.spawn(move || {
+                    let (fy0, fy1) = (k * faixa, ((k + 1) * faixa).min(h) - 1);
+                    for t in projs.iter().filter(|t| t.y1 >= fy0 && t.y0 <= fy1) {
+                        let p = &t.p;
+                        // funções de aresta lineares: w = a·x + b·y + c (normalizadas pela área)
+                        let a0 = (p[1][1] - p[2][1]) * t.inv;
+                        let b0 = (p[2][0] - p[1][0]) * t.inv;
+                        let c0 = (p[1][0] * p[2][1] - p[2][0] * p[1][1]) * t.inv;
+                        let a1 = (p[2][1] - p[0][1]) * t.inv;
+                        let b1 = (p[0][0] - p[2][0]) * t.inv;
+                        let c1 = (p[2][0] * p[0][1] - p[0][0] * p[2][1]) * t.inv;
+                        for yy in t.y0.max(fy0)..=t.y1.min(fy1) {
+                            let py = yy as f32 + 0.5;
+                            let px0 = t.x0 as f32 + 0.5;
+                            let mut w0 = a0 * px0 + b0 * py + c0;
+                            let mut w1 = a1 * px0 + b1 * py + c1;
+                            let base = (yy - fy0) * w;
+                            for xx in t.x0..=t.x1 {
+                                let w2 = 1.0 - w0 - w1;
+                                if w0 >= -1e-5 && w1 >= -1e-5 && w2 >= -1e-5 {
+                                    let z = (w0 * p[0][2] + w1 * p[1][2] + w2 * p[2][2]) * t.vies;
+                                    let i = base + xx;
+                                    if z > pf[i] {
+                                        pf[i] = z;
+                                        tp[i] = t.it;
+                                        br[i] = [w0 * p[0][2] / z * t.vies, w1 * p[1][2] / z * t.vies];
+                                        idp[i] = t.peca;
+                                    }
+                                }
+                                w0 += a0;
+                                w1 += a1;
+                            }
+                        }
                     }
-                }
-            })
-            .collect();
-        let mut saida = cor.clone();
-        for yy in 0..h {
-            for xx in 0..w {
-                let i = yy * w + xx;
-                if id[i] == 0 {
-                    continue;
-                }
-                let mut borda = false;
-                for (dx, dy) in [(linha as isize, 0isize), (0, linha as isize), (-(linha as isize), 0), (0, -(linha as isize))] {
-                    let (nx, ny) = (xx as isize + dx, yy as isize + dy);
-                    if nx < 0 || ny < 0 || nx >= w as isize || ny >= h as isize {
-                        continue;
-                    }
-                    let j = ny as usize * w + nx as usize;
-                    // só desenha o contorno no pixel mais próximo da câmera
-                    if id[j] != id[i] && prof[i] >= prof[j] {
-                        borda = true;
-                        break;
-                    }
-                    if id[j] == id[i] && (prof[i] - prof[j]).abs() > 0.02 * prof[i] {
-                        borda = true;
-                        break;
-                    }
-                }
-                if borda {
-                    let c = cor[i];
-                    saida[i] = Color32::from_rgb((c.r() as f32 * 0.45) as u8, (c.g() as f32 * 0.45) as u8, (c.b() as f32 * 0.45) as u8);
-                }
+                });
             }
-        }
+        });
+
+        // 3) cor (textura uma vez por pixel visível) e contornos, também por faixas
+        let linha = (escala.round() as isize).max(1);
+        let mut saida = vec![fundo; w * h];
+        std::thread::scope(|sc| {
+            for (k, out) in saida.chunks_mut(faixa * w).enumerate() {
+                let (tri_px, bar, prof, id) = (&tri_px, &bar, &prof, &id);
+                sc.spawn(move || {
+                    let cor_px = |i: usize| -> Color32 {
+                        let Some(t) = self.tris.get(tri_px[i] as usize) else { return fundo };
+                        match t.tex {
+                            None => Color32::from_rgb(t.cor[0], t.cor[1], t.cor[2]),
+                            Some((tx, esc, eixo, tinta)) => {
+                                let [b0, b1] = bar[i];
+                                let b2 = 1.0 - b0 - b1;
+                                let pw = |k: usize| (b0 as f64 * t.v[0][k] + b1 as f64 * t.v[1][k] + b2 as f64 * t.v[2][k]) as f32;
+                                let (s, r) = match eixo { 0 => (pw(2), pw(1)), 1 => (pw(0), pw(2)), _ => (pw(0), pw(1)) };
+                                let c = super::texturas::amostrar(super::texturas::pixels(tx), s / esc, -r / esc);
+                                let q = |x: u8, k: f32| (x as f32 * k).clamp(0.0, 255.0) as u8;
+                                Color32::from_rgb(q(c[0], tinta[0]), q(c[1], tinta[1]), q(c[2], tinta[2]))
+                            }
+                        }
+                    };
+                    let fy0 = k * faixa;
+                    for (j, o) in out.iter_mut().enumerate() {
+                        let i = fy0 * w + j;
+                        if id[i] == 0 {
+                            continue;
+                        }
+                        let (xx, yy) = ((i % w) as isize, (i / w) as isize);
+                        let mut borda = false;
+                        for (dx, dy) in [(linha, 0), (0, linha), (-linha, 0), (0, -linha)] {
+                            let (nx, ny) = (xx + dx, yy + dy);
+                            if nx < 0 || ny < 0 || nx >= w as isize || ny >= h as isize {
+                                continue;
+                            }
+                            let n = ny as usize * w + nx as usize;
+                            // contorno só no pixel mais próximo da câmera
+                            if (id[n] != id[i] && prof[i] >= prof[n]) || (id[n] == id[i] && (prof[i] - prof[n]).abs() > 0.02 * prof[i]) {
+                                borda = true;
+                                break;
+                            }
+                        }
+                        let c = cor_px(i);
+                        *o = if borda { Color32::from_rgb((c.r() as f32 * 0.45) as u8, (c.g() as f32 * 0.45) as u8, (c.b() as f32 * 0.45) as u8) } else { c };
+                    }
+                });
+            }
+        });
         egui::ColorImage { size: [w, h], pixels: saida }
     }
 
-    /// Desenha a cena em `rect`: re-rasteriza só se a câmera, as opções ou o tamanho mudaram.
-    fn desenhar(&self, ui: &egui::Ui, painter: &egui::Painter, rect: egui::Rect, cam: &Camera, fundo: Color32) {
+    /// Desenha a cena em `rect`: re-rasteriza só se a câmera, as opções ou o tamanho
+    /// mudaram. Durante a interação (girar/aproximar) usa resolução reduzida e, ao
+    /// soltar, refaz em resolução cheia.
+    fn desenhar(&self, ui: &egui::Ui, painter: &egui::Painter, rect: egui::Rect, cam: &Camera, fundo: Color32, interagindo: bool) {
         use std::hash::{Hash, Hasher};
         let ppp = ui.ctx().pixels_per_point();
-        // resolução limitada (~1,6 Mpx) para manter o programa leve
+        let limite = if interagindo { 0.30e6 } else { 1.2e6 };
         let mut esc = ppp;
         let px = (rect.width() * esc) * (rect.height() * esc);
-        if px > 1.6e6 {
-            esc *= (1.6e6 / px).sqrt();
+        if px > limite {
+            esc *= (limite / px).sqrt();
         }
         let (w, h) = (((rect.width() * esc) as usize).max(16), ((rect.height() * esc) as usize).max(16));
         let mut hs = std::collections::hash_map::DefaultHasher::new();
@@ -284,6 +330,7 @@ impl Cena {
         painter.image(tex.id(), rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
     }
 }
+
 
 /// Cena em cache: remonta só quando o projeto, o trecho ou o corte mudam.
 fn cena(ctx: &egui::Context, proj: &Projeto, res: &Resultado, cam: &Camera) -> std::sync::Arc<Cena> {
@@ -393,7 +440,12 @@ pub fn janela(ctx: &egui::Context, aberta: &mut bool, cam: &mut Camera, proj: &P
             if resp.double_clicked() {
                 cam.zoom = 1.0;
             }
-            cn.desenhar(ui, &painter.with_clip_rect(resp.rect), resp.rect, cam, fundo);
+            // girando ou aproximando: resolução reduzida (refaz em resolução cheia ao soltar)
+            let interagindo = resp.dragged() || (resp.hovered() && ui.input(|i| i.smooth_scroll_delta.y != 0.0));
+            cn.desenhar(ui, &painter.with_clip_rect(resp.rect), resp.rect, cam, fundo, interagindo);
+            if !interagindo && ui.ctx().input(|i| i.pointer.any_released()) {
+                ui.ctx().request_repaint();
+            }
             painter.rect_stroke(resp.rect, 8.0, Stroke::new(1.0_f32, p.borda), egui::StrokeKind::Inside);
             ui.label(
                 RichText::new(format!(
@@ -512,6 +564,31 @@ mod amostra_misto {
             let img = cena.rasterizar(900, 600, &Camera { azimute: az, elevacao: el, zoom: 1.2, corte, ..Camera::default() }, Color32::from_rgb(236, 240, 245), 1.0);
             let px: Vec<u8> = img.pixels.iter().flat_map(|c| [c.r(), c.g(), c.b()]).collect();
             std::fs::write(format!("{pasta}/misto_{v}.png"), crate::raster::Imagem { w: 900, h: 600, px }.png()).unwrap();
+        }
+    }
+}
+
+#[cfg(test)]
+mod desempenho {
+    use super::*;
+    /// Tempo de rasterização (conferência): cargo test --release desempenho -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn tempo() {
+        let mut p = Projeto::default();
+        p.tipo = crate::projeto::TipoContencao::Atirantada;
+        p.geometria.h = 6.0;
+        p.pre_dimensionar();
+        let r = p.calcular();
+        let t0 = std::time::Instant::now();
+        let cena = Cena::montar(1, Modelo3d::montar(&p, &r, 10.0, false));
+        println!("montar cena: {:?} ({} triângulos)", t0.elapsed(), cena.tris.len());
+        for (w, h) in [(640, 470), (1340, 900)] {
+            let t = std::time::Instant::now();
+            for _ in 0..5 {
+                let _ = cena.rasterizar(w, h, &Camera::default(), Color32::WHITE, 1.0);
+            }
+            println!("{w}×{h}: {:?} por quadro", t.elapsed() / 5);
         }
     }
 }
