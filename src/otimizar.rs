@@ -169,6 +169,16 @@ fn ajustar_estrutura(p: &mut Projeto) {
                 // sistema misto: pilar mais alto; painel com canaletas mais próximas,
                 // bloco mais largo ou mais resistente
                 let mi = &mut m.misto;
+                if (tem("Pilar: espaçamento") || tem("Pilar: Ø longitudinal ≤")) && mi.pilar_b < 0.60 {
+                    mi.pilar_b = crate::projeto::arred(mi.pilar_b + 0.05);
+                    ch = true;
+                }
+                if tem("Bloco: tirante") {
+                    if let Some(d) = crate::tipos::misto::DIAM_ESTACA.iter().find(|d| **d > mi.diam_estaca + 1e-9) {
+                        mi.diam_estaca = *d;
+                        ch = true;
+                    }
+                }
                 if tem("Pilar") && mi.pilar_h < 0.80 {
                     mi.pilar_h = crate::projeto::arred(mi.pilar_h + 0.05);
                     ch = true;

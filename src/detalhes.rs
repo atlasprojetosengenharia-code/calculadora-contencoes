@@ -11,6 +11,12 @@ use crate::resultado::{fmt, Desenho, Resultado, Estilo};
 enum Detalhe {
     /// Vista superior do muro misto (pilares, blocos e estacas).
     PlantaMisto,
+    /// Seções de concreto armado do muro misto (com barras, estribos e cobrimento).
+    SecaoPilar,
+    SecaoViga,
+    SecaoBaldrame,
+    BlocoEstacas,
+    SecaoEstaca,
     Canaleta,
     Barbaca,
     CabecaGrampo,
@@ -23,7 +29,12 @@ fn lista(proj: &Projeto) -> Vec<Detalhe> {
     let dr = &proj.drenagem;
     let mut v = Vec::new();
     match proj.tipo {
-        TipoContencao::Flexao if proj.flexao.sistema == crate::tipos::misto::Sistema::Misto => v.push(Detalhe::PlantaMisto),
+        TipoContencao::Flexao if proj.flexao.sistema == crate::tipos::misto::Sistema::Misto => {
+            v.extend([Detalhe::PlantaMisto, Detalhe::SecaoPilar, Detalhe::SecaoViga]);
+            if proj.flexao.misto.fundacao_estacas() {
+                v.extend([Detalhe::SecaoBaldrame, Detalhe::BlocoEstacas, Detalhe::SecaoEstaca]);
+            }
+        }
         TipoContencao::Grampeado => {
             v.push(Detalhe::CabecaGrampo);
             v.push(Detalhe::SecaoGrampo);
@@ -53,6 +64,7 @@ pub fn existem(proj: &Projeto) -> bool {
 fn desenhar_item(d: &mut Desenho, det: Detalhe, cx: f64, cy: f64, k: f64, proj: &Projeto, res: &Resultado) {
     match det {
         Detalhe::PlantaMisto => proj.preparar_flexao().misto.planta(d, cx, cy, k),
+        Detalhe::SecaoPilar | Detalhe::SecaoViga | Detalhe::SecaoBaldrame | Detalhe::BlocoEstacas | Detalhe::SecaoEstaca => secao_misto(d, det, cx, cy, k, proj, res),
         Detalhe::Canaleta => canaleta(d, cx, cy, k),
         Detalhe::Barbaca => barbaca(d, cx, cy, k, &proj.drenagem),
         Detalhe::CabecaGrampo => cabeca_grampo(d, cx, cy, k, proj),
@@ -376,5 +388,156 @@ mod testes {
         anexar(&mut d, &p, &r);
         assert!(d.textos.len() > antes + 8);
         assert!(d.textos[antes..].iter().all(|t| t.pos[0] > xmax - 1e-6), "detalhes à direita da seção");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Seções de concreto armado do muro misto (NBR 6118: cobrimento, barras, estribos)
+// ---------------------------------------------------------------------------
+
+fn arm<'a>(res: &'a Resultado, pos: &str) -> Option<&'a crate::armadura::Armadura> {
+    res.armaduras.iter().find(|a| a.pos == pos)
+}
+
+fn qtd(a: &crate::armadura::Armadura) -> usize {
+    a.quantidade.split(|c: char| !c.is_ascii_digit()).find(|t| !t.is_empty()).and_then(|t| t.parse().ok()).unwrap_or(2).max(1)
+}
+
+/// Seção retangular b × h (m) centrada em (cx, cy): concreto, estribo no cobrimento,
+/// barras (posição relativa ao centro, Ø mm), cotas e rótulos.
+#[allow(clippy::too_many_arguments)]
+fn secao_ret(d: &mut Desenho, cx: f64, cy: f64, k: f64, b: f64, h: f64, cob: f64, barras: &[([f64; 2], f64)], phi_t: Option<f64>, titulo: &str, rotulos: &[String]) {
+    let esc = k * (2.4 / b).min(1.9 / h);
+    let t = |x: f64, y: f64| [cx + esc * x, cy + esc * y];
+    let (bx, hy) = (b / 2.0, h / 2.0);
+    d.poli(Estilo::Concreto, vec![t(-bx, -hy), t(bx, -hy), t(bx, hy), t(-bx, hy)]);
+    if let Some(ft) = phi_t {
+        let o = cob + ft / 2000.0;
+        let g = 0.06_f64.min(0.25 * b);
+        // estribo fechado com ganchos a 135° no canto superior esquerdo
+        d.linha(Estilo::Armadura, vec![t(-bx + o + g, hy - o - g * 0.7), t(-bx + o, hy - o), t(bx - o, hy - o), t(bx - o, -hy + o), t(-bx + o, -hy + o), t(-bx + o, hy - o), t(-bx + o + g * 0.7, hy - o - g)]);
+    }
+    for (p, phi) in barras {
+        d.circulo(Estilo::ArmaduraSecao, t(p[0], p[1]), (phi / 2000.0 * esc).max(0.018 * k));
+    }
+    d.cota_h(t(-bx, 0.0)[0], t(bx, 0.0)[0], cy - esc * hy - 0.22 * k, cy - esc * hy, 0.07 * k, format!("{} cm", fmt(100.0 * b)));
+    d.cota_v(t(0.0, -hy)[1], t(0.0, hy)[1], cx - esc * bx - 0.22 * k, cx - esc * bx, 0.07 * k, format!("{} cm", fmt(100.0 * h)));
+    d.texto([cx, cy + esc * hy + 0.30 * k], titulo);
+    for (i, r) in rotulos.iter().enumerate() {
+        d.texto([cx, cy - esc * hy - (0.48 + 0.16 * i as f64) * k], r.clone());
+    }
+}
+
+/// Barras distribuídas numa linha de a até b (inclusive).
+fn linha_barras(a: [f64; 2], b: [f64; 2], n: usize, phi: f64) -> Vec<([f64; 2], f64)> {
+    (0..n)
+        .map(|i| {
+            let s = if n > 1 { i as f64 / (n - 1) as f64 } else { 0.5 };
+            ([a[0] + (b[0] - a[0]) * s, a[1] + (b[1] - a[1]) * s], phi)
+        })
+        .collect()
+}
+
+fn circulo_pts(cx: f64, cy: f64, r: f64) -> Vec<[f64; 2]> {
+    (0..=32)
+        .map(|i| {
+            let a = std::f64::consts::TAU * i as f64 / 32.0;
+            [cx + r * a.cos(), cy + r * a.sin()]
+        })
+        .collect()
+}
+
+fn secao_misto(d: &mut Desenho, det: Detalhe, cx: f64, cy: f64, k: f64, proj: &Projeto, res: &Resultado) {
+    let fx = proj.preparar_flexao();
+    let mi = &fx.misto;
+    let cob = fx.concreto.cobrimento;
+    let desc = |p: &str| arm(res, p).map(|a| format!("{} — {}", a.descricao(), a.elemento)).unwrap_or_default();
+    let cobr = format!("cobrimento nominal {} cm", fmt(100.0 * cob));
+    match det {
+        Detalhe::SecaoPilar => {
+            let (Some(n1), Some(n3)) = (arm(res, "N1"), arm(res, "N3")) else { return };
+            // b ao longo do muro (horizontal no desenho), h para o aterro (vertical, aterro em cima)
+            let (b, h) = (mi.pilar_b, mi.pilar_h);
+            let (ft, f) = (n3.bitola_mm / 1000.0, n1.bitola_mm / 1000.0);
+            let o = cob + ft + f / 2.0;
+            let mut barras = linha_barras([-b / 2.0 + o, h / 2.0 - o], [b / 2.0 - o, h / 2.0 - o], qtd(n1), n1.bitola_mm);
+            let o2 = cob + ft + 0.005;
+            barras.extend(linha_barras([-b / 2.0 + o2, -h / 2.0 + o2], [b / 2.0 - o2, -h / 2.0 + o2], 2, 10.0));
+            secao_ret(d, cx, cy, k, b, h, cob, &barras, Some(n3.bitola_mm), "SECAO DO PILAR (aterro em cima)", &[desc("N1"), desc("N3"), format!("2 Ø10 porta-estribos na face externa ; {cobr}")]);
+        }
+        Detalhe::SecaoViga => {
+            let (Some(n8), Some(n12)) = (arm(res, "N8"), arm(res, "N12")) else { return };
+            // b perpendicular ao muro (horizontal no desenho, aterro à direita), h vertical
+            let (b, h) = (mi.viga_b, mi.viga_h);
+            let (ft, f) = (n12.bitola_mm / 1000.0, n8.bitola_mm / 1000.0);
+            let o = cob + ft + f / 2.0;
+            let n = qtd(n8);
+            let mut barras = linha_barras([-b / 2.0 + o, -h / 2.0 + o], [-b / 2.0 + o, h / 2.0 - o], n, n8.bitola_mm);
+            barras.extend(linha_barras([b / 2.0 - o, -h / 2.0 + o], [b / 2.0 - o, h / 2.0 - o], n, n8.bitola_mm));
+            secao_ret(d, cx, cy, k, b, h, cob, &barras, Some(n12.bitola_mm), "SECAO DA VIGA INTERMEDIARIA (aterro a direita)", &[desc("N8"), desc("N12"), cobr]);
+        }
+        Detalhe::SecaoBaldrame => {
+            let (Some(n9), Some(n13)) = (arm(res, "N9"), arm(res, "N13")) else { return };
+            let (b, h) = (mi.baldrame_b, mi.baldrame_h);
+            let (ft, f) = (n13.bitola_mm / 1000.0, n9.bitola_mm / 1000.0);
+            let o = cob + ft + f / 2.0;
+            let n = qtd(n9);
+            let mut barras = linha_barras([-b / 2.0 + o, -h / 2.0 + o], [b / 2.0 - o, -h / 2.0 + o], n, n9.bitola_mm);
+            barras.extend(linha_barras([-b / 2.0 + o, h / 2.0 - o], [b / 2.0 - o, h / 2.0 - o], n, n9.bitola_mm));
+            secao_ret(d, cx, cy, k, b, h, cob, &barras, Some(n13.bitola_mm), "SECAO DA VIGA BALDRAME", &[desc("N9"), desc("N13"), cobr]);
+        }
+        Detalhe::SecaoEstaca => {
+            let (Some(n10), Some(n14)) = (arm(res, "N10"), arm(res, "N14")) else { return };
+            let dd = mi.diam_estaca;
+            let esc = k * 1.9 / dd;
+            let r = dd / 2.0;
+            d.linha(Estilo::Concreto, circulo_pts(cx, cy, esc * r));
+            let rh = r - cob - n14.bitola_mm / 2000.0;
+            d.linha(Estilo::Armadura, circulo_pts(cx, cy, esc * rh));
+            let n = qtd(n10);
+            let rb = rh - n14.bitola_mm / 2000.0 - n10.bitola_mm / 2000.0;
+            for i in 0..n {
+                let a = std::f64::consts::TAU * i as f64 / n as f64;
+                d.circulo(Estilo::ArmaduraSecao, [cx + esc * rb * a.cos(), cy + esc * rb * a.sin()], (n10.bitola_mm / 2000.0 * esc).max(0.018 * k));
+            }
+            d.texto([cx, cy + esc * r + 0.30 * k], format!("SECAO DA ESTACA Ø{} cm", fmt(100.0 * dd)));
+            for (i, t) in [desc("N10"), desc("N14"), cobr].iter().enumerate() {
+                d.texto([cx, cy - esc * r - (0.35 + 0.16 * i as f64) * k], t.clone());
+            }
+        }
+        Detalhe::BlocoEstacas => {
+            let Some(n11) = arm(res, "N11") else { return };
+            let (e, lb, _bb, hb) = mi.geometria_bloco();
+            let dd = mi.diam_estaca;
+            let esc = k * (3.0 / lb).min(1.4 / hb);
+            let t = |x: f64, y: f64| [cx + esc * x, cy + esc * y];
+            // corte perpendicular ao muro: bloco, estacas embutidas 5 cm, pilar e tirante em U
+            d.poli(Estilo::Concreto, vec![t(-lb / 2.0, -hb / 2.0), t(lb / 2.0, -hb / 2.0), t(lb / 2.0, hb / 2.0), t(-lb / 2.0, hb / 2.0)]);
+            for s in [-1.0, 1.0] {
+                let x = s * e / 2.0;
+                d.poli(Estilo::Concreto, vec![t(x - dd / 2.0, -hb / 2.0 - 0.6 * hb), t(x + dd / 2.0, -hb / 2.0 - 0.6 * hb), t(x + dd / 2.0, -hb / 2.0 + 0.05), t(x - dd / 2.0, -hb / 2.0 + 0.05)]);
+            }
+            let ap = mi.pilar_h;
+            d.poli(Estilo::Concreto, vec![t(-ap / 2.0, hb / 2.0), t(ap / 2.0, hb / 2.0), t(ap / 2.0, hb), t(-ap / 2.0, hb)]);
+            let f = n11.bitola_mm / 1000.0;
+            let y = -hb / 2.0 + cob + 0.05 + f / 2.0;
+            let perna = (hb - 2.0 * cob).min(12.0 * f + 0.1);
+            let xa = lb / 2.0 - cob;
+            d.linha(Estilo::Armadura, vec![t(-xa, y + perna), t(-xa, y), t(xa, y), t(xa, y + perna)]);
+            if let Some(n1) = arm(res, "N1") {
+                // arranques do pilar com dobra de 90° (12Ø) sobre o tirante
+                let x1 = ap / 2.0 - cob - n1.bitola_mm / 2000.0;
+                let fy = y + 0.03;
+                d.linha(Estilo::Armadura, vec![t(x1 - 12.0 * n1.bitola_mm / 1000.0, fy), t(x1, fy), t(x1, 0.95 * hb)]);
+            }
+            let y_cota = cy - esc * (hb / 2.0 + 0.6 * hb) - 0.2 * k;
+            d.cota_h(t(-lb / 2.0, 0.0)[0], t(lb / 2.0, 0.0)[0], y_cota, y_cota + 0.2 * k, 0.07 * k, format!("{} m", fmt(lb)));
+            d.cota_v(t(0.0, -hb / 2.0)[1], t(0.0, hb / 2.0)[1], cx - esc * lb / 2.0 - 0.2 * k, cx - esc * lb / 2.0, 0.07 * k, format!("{} m", fmt(hb)));
+            d.texto([cx, cy + esc * hb + 0.25 * k], format!("BLOCO SOBRE 2 ESTACAS - corte perpendicular ao muro (e = {} m)", fmt(e)));
+            for (i, s) in [desc("N11"), "tirante concentrado sobre as estacas (faixa ≤ 1,2·Ø) ; estacas embutidas 5 cm".to_string(), desc("N1")].iter().enumerate() {
+                d.texto([cx, y_cota - (0.40 + 0.16 * i as f64) * k], s.clone());
+            }
+        }
+        _ => {}
     }
 }

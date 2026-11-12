@@ -517,6 +517,9 @@ impl SoloGrampeado {
                         forma: Forma::Tela,
                     });
                     r.aviso("Paramento: nenhuma tela Q padronizada atende — adotada malha de barras.");
+                    if let Some(a) = tab.last() {
+                        armadura::verificar_laje(r, a, e, true);
+                    }
                 }
             }
         }

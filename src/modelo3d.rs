@@ -26,6 +26,7 @@ pub enum Material {
     Areia,
     Geocomposto,
     Bloco,
+    Armadura,
     SoloArgila,
     SoloAreia,
     SoloSilte,
@@ -48,6 +49,7 @@ impl Material {
             Material::Areia => "Areia grossa (filtro)",
             Material::Geocomposto => "Geocomposto drenante",
             Material::Bloco => "Alvenaria estrutural de blocos de concreto",
+            Material::Armadura => "Aço CA-50 (armadura)",
             Material::SoloArgila => "Solo argiloso (corte)",
             Material::SoloAreia => "Solo arenoso (corte)",
             Material::SoloSilte => "Solo siltoso (corte)",
@@ -70,6 +72,7 @@ impl Material {
             Material::Areia => [0.83, 0.72, 0.52],
             Material::Geocomposto => [0.12, 0.12, 0.13],
             Material::Bloco => [0.66, 0.66, 0.64],
+            Material::Armadura => [0.62, 0.28, 0.16],
             Material::SoloArgila => [0.72, 0.43, 0.25],
             Material::SoloAreia => [0.82, 0.70, 0.50],
             Material::SoloSilte => [0.66, 0.53, 0.36],
@@ -101,6 +104,8 @@ pub enum Classe {
     Canaleta,
     /// Viga de travamento (longarina) de parede ancorada.
     Viga,
+    /// Barras de aço (armadura de concreto armado).
+    Armadura,
     /// Bloco de coroamento sobre estacas.
     Bloco,
     /// Pilar de concreto armado (muro misto).
@@ -320,6 +325,11 @@ fn circulo(xc: f64, zc: f64, d: f64, lados: usize) -> Vec<[f64; 2]> {
             [xc + d / 2.0 * a.cos(), zc + d / 2.0 * a.sin()]
         })
         .collect()
+}
+
+/// Posições ao longo do trecho (uso de outros módulos).
+pub fn posicoes_pub(l: f64, s: f64) -> Vec<f64> {
+    posicoes(l, s)
 }
 
 /// Posições ao longo do trecho para elementos com espaçamento `s`.
@@ -635,6 +645,8 @@ impl Modelo3d {
             }
             _ => None,
         };
+        // armaduras (visíveis com a opção "Armaduras", que oculta o concreto e o solo)
+        md.pecas.extend(crate::armadura3d::gerar(p, r, l));
         md.solos(p, &m, x0, x1, z_solo, l, frente);
         md
     }

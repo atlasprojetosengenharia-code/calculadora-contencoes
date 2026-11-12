@@ -276,3 +276,76 @@ mod testes {
         assert_eq!(tela(1.2).unwrap().0, "Q138");
     }
 }
+
+// ---------------------------------------------------------------------------
+// Verificações de detalhamento — ABNT NBR 6118:2023
+// ---------------------------------------------------------------------------
+
+/// Dimensão máxima característica do agregado graúdo adotada (brita 1, mm).
+pub const D_MAX_AGREGADO_MM: f64 = 19.0;
+
+/// Espaçamento livre mínimo entre barras (NBR 6118 18.3.2.2 e 18.4.2.2), mm:
+/// máx(20 mm ; Ø ; 1,2·dmáx).
+pub fn livre_minimo_mm(phi_mm: f64) -> f64 {
+    20.0_f64.max(phi_mm).max(1.2 * D_MAX_AGREGADO_MM)
+}
+
+/// Lajes e paredes armadas em uma direção principal (NBR 6118 20.1):
+/// Ø ≤ h/8 ; s ≤ mín(20 cm ; 2h) na principal e ≤ 33 cm na distribuição ;
+/// espaçamento livre ≥ mínimo.
+pub fn verificar_laje(r: &mut crate::resultado::Resultado, a: &Armadura, h_m: f64, principal: bool) {
+    use crate::resultado::Verificacao;
+    if a.bitola_mm <= 0.0 {
+        return;
+    }
+    let nome = format!("{} ({})", a.pos, a.elemento.split(" — ").next().unwrap_or(&a.elemento));
+    r.verif(Verificacao::max(format!("{nome}: Ø ≤ h/8 (NBR 6118 20.1)"), a.bitola_mm, h_m * 1000.0 / 8.0, "mm"));
+    if let Some(s) = a.espac_cm {
+        let s_max = if principal { 20.0_f64.min(200.0 * h_m) } else { 33.0 };
+        r.verif(Verificacao::max(format!("{nome}: espaçamento máximo (NBR 6118 20.1)"), s, s_max, "cm"));
+        r.verif(Verificacao::min(format!("{nome}: espaçamento livre mínimo (NBR 6118 18.3.2.2)"), s * 10.0 - a.bitola_mm, livre_minimo_mm(a.bitola_mm), "mm"));
+    }
+}
+
+/// Pilares (NBR 6118 18.4): longitudinais 10 mm ≤ Ø ≤ b/8, espaçamento entre eixos
+/// ≤ mín(2b ; 400 mm), livre ≥ mínimo ; estribos Øt ≥ máx(5 mm ; Øl/4) e
+/// s ≤ mín(200 mm ; menor dimensão ; 12·Øl para CA-50).
+pub fn verificar_pilar(r: &mut crate::resultado::Resultado, b_m: f64, h_m: f64, n_face: usize, phi_l: f64, phi_t: f64, s_t_cm: f64, cob_m: f64) {
+    use crate::resultado::Verificacao;
+    let bmin = b_m.min(h_m) * 1000.0;
+    r.verif(Verificacao::min("Pilar: Ø longitudinal ≥ 10 mm (NBR 6118 18.4.2.1)", phi_l, 10.0, "mm"));
+    r.verif(Verificacao::max("Pilar: Ø longitudinal ≤ b/8 (NBR 6118 18.4.2.1)", phi_l, bmin / 8.0, "mm"));
+    let util = b_m * 1000.0 - 2.0 * cob_m * 1000.0 - 2.0 * phi_t - phi_l;
+    let eixo = if n_face > 1 { util / (n_face - 1) as f64 } else { util };
+    r.verif(Verificacao::max("Pilar: espaçamento entre eixos das barras ≤ mín(2b ; 400 mm) (NBR 6118 18.4.2.2)", eixo, (2.0 * bmin).min(400.0), "mm"));
+    r.verif(Verificacao::min("Pilar: espaçamento livre entre barras (NBR 6118 18.4.2.2)", eixo - phi_l, livre_minimo_mm(phi_l), "mm"));
+    r.verif(Verificacao::min("Pilar: Ø do estribo ≥ máx(5 mm ; Øl/4) (NBR 6118 18.4.3)", phi_t, 5.0_f64.max(phi_l / 4.0), "mm"));
+    r.verif(Verificacao::max("Pilar: espaçamento dos estribos ≤ mín(20 cm ; b ; 12·Øl) (NBR 6118 18.4.3)", s_t_cm * 10.0, 200.0_f64.min(bmin).min(12.0 * phi_l), "mm"));
+}
+
+/// Vigas (NBR 6118 18.3): espaçamento livre das longitudinais ; estribos
+/// 5 mm ≤ Øt ≤ bw/10 e s ≤ 0,6·d ≤ 300 mm (Vd ≤ 0,67·VRd2).
+pub fn verificar_viga(r: &mut crate::resultado::Resultado, nome: &str, bw_m: f64, d_m: f64, n: usize, phi_l: f64, phi_t: f64, s_t_cm: f64, cob_m: f64) {
+    use crate::resultado::Verificacao;
+    let util = bw_m * 1000.0 - 2.0 * cob_m * 1000.0 - 2.0 * phi_t - phi_l;
+    let livre = if n > 1 { util / (n - 1) as f64 - phi_l } else { util };
+    r.verif(Verificacao::min(format!("{nome}: espaçamento livre das barras (NBR 6118 18.3.2.2)"), livre, livre_minimo_mm(phi_l), "mm"));
+    r.verif(Verificacao::min(format!("{nome}: Ø do estribo ≥ 5 mm (NBR 6118 18.3.3.2)"), phi_t, 5.0, "mm"));
+    r.verif(Verificacao::max(format!("{nome}: Ø do estribo ≤ bw/10 (NBR 6118 18.3.3.2)"), phi_t, bw_m * 100.0, "mm"));
+    r.verif(Verificacao::max(format!("{nome}: espaçamento dos estribos ≤ 0,6·d ≤ 300 mm (NBR 6118 18.3.3.2)"), s_t_cm * 10.0, (600.0 * d_m).min(300.0), "mm"));
+}
+
+/// Estribos mínimos de viga (NBR 6118 17.4.1.1.1): ρw = Asw/(bw·s) ≥ 0,2·fctm/fywk ;
+/// Ø 5 ou 6,3 mm ; s = mín(0,6·d ; 300 mm), em cm. Retorna (Ø, s).
+pub fn estribo_minimo(bw_m: f64, d_m: f64, fck: f64, fyk: f64) -> (f64, f64) {
+    let rho = 0.2 * 0.3 * fck.powf(2.0 / 3.0) / fyk.min(500.0);
+    let s_max = (60.0 * d_m).min(30.0);
+    for phi in [5.0, 6.3, 8.0] {
+        let asw = 2.0 * area_barra_cm2(phi); // 2 ramos, cm²
+        let s = (asw / (rho * bw_m * 100.0)).min(s_max).floor();
+        if s >= 7.0 {
+            return (phi, s);
+        }
+    }
+    (8.0, 7.0)
+}

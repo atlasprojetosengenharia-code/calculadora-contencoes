@@ -571,6 +571,10 @@ impl CortinaAtirantada {
             });
         }
         let bv = e.max(0.30);
+        // painel armado nas duas direções: regras de laje (NBR 6118 20.1)
+        for a in &tab {
+            armadura::verificar_laje(r, a, e, true);
+        }
         tab.extend(armadura::viga_construtiva("N3", "N4", "Viga de coroamento", bv, self.viga_h, c.fck, c.fyk, cob));
         r.formula(
             "Viga de coroamento (armadura construtiva)",

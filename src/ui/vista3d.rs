@@ -20,11 +20,13 @@ pub struct Camera {
     pub drenagem: bool,
     /// Maciço de solo só até a metade do trecho (vista em corte).
     pub corte: bool,
+    /// Mostra as armaduras (oculta o concreto e o solo).
+    pub armaduras: bool,
 }
 
 impl Default for Camera {
     fn default() -> Self {
-        Self { azimute: 0.85, elevacao: 0.40, zoom: 1.0, comprimento: 10.0, terreno: true, reforcos: true, drenagem: true, corte: false }
+        Self { azimute: 0.85, elevacao: 0.40, zoom: 1.0, comprimento: 10.0, terreno: true, reforcos: true, drenagem: true, corte: false, armaduras: false }
     }
 }
 
@@ -45,6 +47,8 @@ pub struct Cena {
     tris: Vec<TriCena>,
     centro: [f64; 3],
     raio: f32,
+    centro_est: [f64; 3],
+    raio_est: f32,
     pub modelo: Modelo3d,
 }
 
@@ -117,7 +121,22 @@ impl Cena {
                 tris.push(TriCena { v: t, cor: [q(c[0]), q(c[1]), q(c[2])], peca: ip as u32 + 1, classe: pc.classe, tex });
             }
         }
-        Cena { chave, tris, centro, raio: raio as f32, modelo }
+        // enquadramento só da estrutura (modo Armaduras: concreto e solo ocultos)
+        let (mut ea, mut eb) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+        for t in tris.iter().filter(|t| !matches!(t.classe, Classe::Terreno | Classe::Muro | Classe::Sapata | Classe::Pilar | Classe::Viga | Classe::Bloco | Classe::Estaca | Classe::Canaleta)) {
+            for v in t.v {
+                for k in 0..3 {
+                    ea[k] = ea[k].min(v[k]);
+                    eb[k] = eb[k].max(v[k]);
+                }
+            }
+        }
+        let (centro_est, raio_est) = if ea[0].is_finite() {
+            ([(ea[0] + eb[0]) / 2.0, (ea[1] + eb[1]) / 2.0, (ea[2] + eb[2]) / 2.0], (((eb[0] - ea[0]).powi(2) + (eb[1] - ea[1]).powi(2) + (eb[2] - ea[2]).powi(2)).sqrt() / 2.0).max(0.5) as f32)
+        } else {
+            (centro, raio as f32)
+        };
+        Cena { chave, tris, centro, raio: raio as f32, centro_est, raio_est, modelo }
     }
 
     /// Rasteriza a cena (z-buffer, contornos nas arestas das peças) numa imagem `w × h`.
@@ -125,11 +144,11 @@ impl Cena {
     fn rasterizar(&self, w: usize, h: usize, cam: &Camera, fundo: Color32, escala: f32) -> egui::ColorImage {
         let (sa, ca) = cam.azimute.sin_cos();
         let (se, ce) = cam.elevacao.sin_cos();
-        let raio = self.raio;
+        let raio = if cam.armaduras { self.raio_est } else { self.raio };
         let dist = 3.2 * raio;
         let foco = 0.5 * (w.min(h) as f32) * 3.4 * cam.zoom;
         let (cx, cy) = (w as f32 / 2.0, h as f32 / 2.0);
-        let c0 = self.centro;
+        let c0 = if cam.armaduras { self.centro_est } else { self.centro };
 
         // 1) projeção (uma vez): vértices na tela, 1/d e caixa envolvente
         struct Proj {
@@ -145,7 +164,10 @@ impl Cena {
         }
         let mut projs: Vec<Proj> = Vec::with_capacity(self.tris.len());
         for (it, t) in self.tris.iter().enumerate() {
-            if (t.classe == Classe::Terreno && !cam.terreno)
+            let concreto = matches!(t.classe, Classe::Muro | Classe::Sapata | Classe::Pilar | Classe::Viga | Classe::Bloco | Classe::Estaca | Classe::Canaleta);
+            if (cam.armaduras && (concreto || matches!(t.classe, Classe::Terreno | Classe::Filtro)))
+                || (!cam.armaduras && t.classe == Classe::Armadura)
+                || (t.classe == Classe::Terreno && !cam.terreno)
                 || (matches!(t.classe, Classe::Tirante | Classe::Grampo | Classe::Placa | Classe::Cabeca) && !cam.reforcos)
                 || (matches!(t.classe, Classe::Tubo | Classe::Filtro | Classe::Canaleta) && !cam.drenagem)
             {
@@ -307,7 +329,7 @@ impl Cena {
         let (w, h) = (((rect.width() * esc) as usize).max(16), ((rect.height() * esc) as usize).max(16));
         let mut hs = std::collections::hash_map::DefaultHasher::new();
         self.chave.hash(&mut hs);
-        (w, h, cam.azimute.to_bits(), cam.elevacao.to_bits(), cam.zoom.to_bits(), cam.terreno, cam.reforcos, cam.drenagem).hash(&mut hs);
+        (w, h, cam.azimute.to_bits(), cam.elevacao.to_bits(), cam.zoom.to_bits(), cam.terreno, cam.reforcos, cam.drenagem, cam.armaduras).hash(&mut hs);
         fundo.to_array().hash(&mut hs);
         let chave = hs.finish();
         let id = egui::Id::new("imagem_3d");
@@ -398,6 +420,7 @@ pub fn janela(ctx: &egui::Context, aberta: &mut bool, cam: &mut Camera, proj: &P
                 ui.add_enabled(cam.terreno, egui::Checkbox::new(&mut cam.corte, "Corte no maciço")).on_hover_text("Mostra o solo só em metade do trecho, para ver tirantes, grampos e drenagem por dentro");
                 ui.checkbox(&mut cam.reforcos, "Tirantes/grampos");
                 ui.checkbox(&mut cam.drenagem, "Drenagem");
+                ui.checkbox(&mut cam.armaduras, "Armaduras").on_hover_text("Mostra as barras de aço (NBR 6118) e oculta o concreto e o solo");
                 ui.separator();
                 if ui.button("Frontal").clicked() {
                     (cam.azimute, cam.elevacao) = (std::f32::consts::FRAC_PI_2, 0.05);
@@ -406,7 +429,7 @@ pub fn janela(ctx: &egui::Context, aberta: &mut bool, cam: &mut Camera, proj: &P
                     (cam.azimute, cam.elevacao) = (0.0, 0.05);
                 }
                 if ui.button("Isométrica").clicked() {
-                    *cam = Camera { comprimento: cam.comprimento, terreno: cam.terreno, reforcos: cam.reforcos, drenagem: cam.drenagem, corte: cam.corte, ..Camera::default() };
+                    *cam = Camera { comprimento: cam.comprimento, terreno: cam.terreno, reforcos: cam.reforcos, drenagem: cam.drenagem, corte: cam.corte, armaduras: cam.armaduras, ..Camera::default() };
                 }
                 ui.separator();
                 if ui.button("💾 Exportar IFC…").on_hover_text("IFC4 — abre em Revit, BIMvision, Solibri, BlenderBIM etc.").clicked() {
@@ -589,6 +612,46 @@ mod desempenho {
                 let _ = cena.rasterizar(w, h, &Camera::default(), Color32::WHITE, 1.0);
             }
             println!("{w}×{h}: {:?} por quadro", t.elapsed() / 5);
+        }
+    }
+}
+
+#[cfg(test)]
+mod amostra_armaduras {
+    use super::*;
+    use crate::projeto::TipoContencao;
+    #[test]
+    #[ignore]
+    fn armaduras() {
+        let Ok(pasta) = std::env::var("PASTA_3D") else { return };
+        let casos: Vec<(&str, Projeto)> = {
+            let mut v = Vec::new();
+            for (nome, tipo) in [("flexao", TipoContencao::Flexao), ("atirantada", TipoContencao::Atirantada), ("estacas", TipoContencao::Estacas), ("grampeado", TipoContencao::Grampeado)] {
+                let mut p = Projeto::default();
+                p.tipo = tipo;
+                p.geometria.h = 3.0;
+                p.pre_dimensionar();
+                v.push((nome, p));
+            }
+            let mut p = Projeto::default();
+            p.tipo = TipoContencao::Flexao;
+            p.geometria.h = 3.0;
+            p.pre_dimensionar();
+            p.flexao.sistema = crate::tipos::misto::Sistema::Misto;
+            v.push(("misto", p));
+            v
+        };
+        for (nome, p) in casos {
+            let r = p.calcular();
+            let cena = Cena::montar(1, Modelo3d::montar(&p, &r, 4.0, false));
+            let cam = Camera { armaduras: true, azimute: 0.9, elevacao: 0.35, zoom: 1.2, ..Camera::default() };
+            let img = cena.rasterizar(900, 600, &cam, Color32::from_rgb(236, 240, 245), 1.0);
+            let px: Vec<u8> = img.pixels.iter().flat_map(|c| [c.r(), c.g(), c.b()]).collect();
+            std::fs::write(format!("{pasta}/arm_{nome}.png"), crate::raster::Imagem { w: 900, h: 600, px }.png()).unwrap();
+            let det = crate::detalhes::montar(&p, &r, 1.0, 2);
+            if !det.linhas.is_empty() {
+                std::fs::write(format!("{pasta}/det_{nome}.png"), crate::raster::desenho_png(&det, 1400, crate::raster::altura_para(&det, 1400))).unwrap();
+            }
         }
     }
 }

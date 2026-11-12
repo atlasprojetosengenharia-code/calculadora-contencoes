@@ -3,6 +3,7 @@
 
 mod alvenaria;
 mod app;
+mod armadura3d;
 mod armadura;
 mod barras;
 mod atualizacao;

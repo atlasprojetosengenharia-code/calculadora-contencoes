@@ -1139,6 +1139,8 @@ mod testes_predim {
                     k.starts_with("Tirante")
                         || k.starts_with("Carga máx")
                         || k.starts_with("Punção")
+                        // regras de detalhamento (espaçamentos, bitolas): dependem da escolha das barras
+                        || ["NBR 6118 20.1", "NBR 6118 18.3", "NBR 6118 18.4", "NBR 6118 22.7"].iter().any(|n| k.contains(n))
                         // ficha calculada cresce com a água, o que pode melhorar a estabilidade global
                         || (k.contains("estabilidade") && matches!(tipo, TipoContencao::Prancha | TipoContencao::Estacas))
                 };

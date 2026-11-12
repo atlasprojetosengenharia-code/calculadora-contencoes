@@ -461,6 +461,7 @@ impl MuroFlexao {
         });
         if let Some(d) = dm {
             tab.extend(armaduras_vigas(d, &self.misto, c));
+            tab.extend(detalhes_nbr_misto(r, d, &self.misto, c, h - hs));
         }
 
         // formas para o desenho das posições isoladas (coerentes com o esquema da seção)
@@ -505,6 +506,19 @@ impl MuroFlexao {
         r.norma(normas::NBR6122_LASTRO);
         r.norma(normas::NBR6122_PROF_MINIMA);
         r.linha("Fundação: lastro de concreto não estrutural (e ≥ 5 cm) sob toda a sapata; apoio a no mínimo 1,5 m de profundidade nas divisas, salvo em rocha.");
+        if dm.is_none() {
+            // parede e sapata trabalham como lajes (NBR 6118 20.1)
+            for a in &tab {
+                let (esp, principal) = match a.pos.as_str() {
+                    "N1" => (tb, true),
+                    "N2" | "N3" => (tb, false),
+                    "N4" | "N5" => (hs, true),
+                    "N6" => (hs, false),
+                    _ => continue,
+                };
+                armadura::verificar_laje(r, a, esp, principal);
+            }
+        }
         r.armaduras.extend(tab);
         DetalheFlexao { cob, l0t: l0t / 100.0, lb_n7: n1.lb_cm / 100.0, rotulos: r.armaduras.iter().map(|a| a.descricao()).collect() }
     }
@@ -744,6 +758,7 @@ impl MuroFlexao {
             forma: Forma::Estribo { b: eb, h: eh },
         });
         tab.extend(armaduras_vigas(d, mi, c));
+        tab.extend(detalhes_nbr_misto(r, d, mi, c, h - hs));
         r.linha(format!(
             "Pilares {} × {} cm a cada {} m ; {} viga(s) intermediária(s) {} × {} cm ; viga de respaldo em canaleta ; baldrame {} × {} cm.",
             fmt(100.0 * mi.pilar_b),
@@ -857,7 +872,8 @@ fn armaduras_vigas(d: &DimMisto, mi: &Misto, c: &Concreto) -> Vec<Armadura> {
             forma: Forma::Reta,
         });
         let [lbl, bbl, _] = e.bloco;
-        let (n, phi) = super::misto::barras(e.as_bloco, bbl, cob);
+        // tirante concentrado na faixa de 1,2·Ø sobre a estaca (NBR 6118 22.7.4.1.1)
+        let (n, phi) = super::misto::barras(e.as_bloco, 1.2 * mi.diam_estaca + 2.0 * cob + 0.016, cob);
         v.push(Armadura {
             pos: "N11".into(),
             elemento: "Bloco — tirante inferior sobre as estacas".into(),
@@ -957,4 +973,69 @@ mod teste_exemplo_marchetti {
         let fs = r.verificacoes.iter().find(|v| v.nome.starts_with("FS tombamento")).unwrap().valor;
         assert!((2.7..3.05).contains(&fs), "FS tombamento = {fs}");
     }
+}
+
+/// Verificações de detalhamento do muro misto (NBR 6118: pilares 18.4, vigas 18.3,
+/// blocos 22.7) e as armaduras transversais das vigas, do baldrame e das estacas.
+fn detalhes_nbr_misto(r: &mut Resultado, d: &DimMisto, mi: &Misto, c: &Concreto, h_parede: f64) -> Vec<Armadura> {
+    let cob = c.cobrimento;
+    let mut v = Vec::new();
+    armadura::verificar_pilar(r, mi.pilar_b, mi.pilar_h, d.n_barras, d.phi_pilar, d.phi_estribo, d.s_estribo, cob);
+    let estribo = |pos: &str, elem: String, bw: f64, h: f64, n_peca: String| -> Armadura {
+        let (eb, eh) = ((bw - 2.0 * cob).max(0.06), (h - 2.0 * cob).max(0.06));
+        let (phi, s) = armadura::estribo_minimo(bw, h - cob - 0.0125, c.fck, c.fyk);
+        Armadura {
+            pos: pos.into(),
+            elemento: elem,
+            bitola_mm: phi,
+            espac_cm: Some(s),
+            quantidade: n_peca,
+            comprimento_m: 2.0 * (eb + eh) + 2.0 * armadura::gancho_estribo_cm(phi) / 100.0,
+            as_nec: 0.0,
+            as_ef: 2.0 * armadura::area_barra_cm2(phi) * 100.0 / s,
+            unidade: "cm²/m",
+            lb_cm: 0.0,
+            forma: Forma::Estribo { b: eb, h: eh },
+        }
+    };
+    if let Some(vg) = d.vigas.iter().max_by_key(|g| g.n) {
+        // seção da viga no plano vertical ⟂ ao muro: largura vertical viga_h, altura útil na largura viga_b
+        let e = estribo("N12", "Vigas intermediárias — estribos (2 ramos)".into(), mi.viga_h, mi.viga_b, format!("{}/m", 0));
+        armadura::verificar_viga(r, "Vigas intermediárias", mi.viga_h, mi.viga_b - cob - 0.0125, vg.n, vg.phi, e.bitola_mm, e.espac_cm.unwrap_or(15.0), cob);
+        let mut e = e;
+        e.quantidade = format!("{}/m", (100.0 / e.espac_cm.unwrap_or(15.0)).ceil());
+        v.push(e);
+    }
+    if let Some(est) = &d.estacas {
+        let e = estribo("N13", "Viga baldrame — estribos (2 ramos)".into(), mi.baldrame_b, mi.baldrame_h, String::new());
+        armadura::verificar_viga(r, "Viga baldrame", mi.baldrame_b, mi.baldrame_h - cob - 0.0125, d.baldrame_n, d.baldrame_phi, e.bitola_mm, e.espac_cm.unwrap_or(15.0), cob);
+        let mut e = e;
+        e.quantidade = format!("{}/m", (100.0 / e.espac_cm.unwrap_or(15.0)).ceil());
+        v.push(e);
+        // estaca: hélice Ø5 c/20 no trecho armado (NBR 6122 Tab. 4 / NBR 6118 18.4.3)
+        let dm = mi.diam_estaca - 2.0 * cob;
+        let l_arm = est.comprimento.min(4.0).max(3.0);
+        v.push(Armadura {
+            pos: "N14".into(),
+            elemento: "Estaca — hélice (estribo contínuo)".into(),
+            bitola_mm: 6.3,
+            espac_cm: Some(20.0),
+            quantidade: format!("{} espiras", (l_arm / 0.20).ceil()),
+            comprimento_m: (l_arm / 0.20).ceil() * std::f64::consts::PI * dm,
+            as_nec: 0.0,
+            as_ef: armadura::area_barra_cm2(6.3) * 5.0,
+            unidade: "cm²/m",
+            lb_cm: 0.0,
+            forma: Forma::Helice { d: dm, passo: 0.20 },
+        });
+        // bloco: tirante concentrado sobre as estacas, numa faixa de até 1,2·Ø (NBR 6118 22.7.4.1.1)
+        let (n, phi) = super::misto::barras(est.as_bloco, 1.2 * mi.diam_estaca + 2.0 * cob + 0.016, cob);
+        let faixa = n as f64 * phi + (n as f64 - 1.0).max(0.0) * armadura::livre_minimo_mm(phi);
+        if n as f64 * armadura::area_barra_cm2(phi) < est.as_bloco - 1e-6 {
+            r.verif(crate::resultado::Verificacao::min("Bloco: tirante cabe na faixa de 1,2·Ø (aumentar o diâmetro da estaca)", n as f64 * armadura::area_barra_cm2(phi), est.as_bloco, "cm²"));
+        }
+        r.verif(crate::resultado::Verificacao::max("Bloco: tirante concentrado sobre a estaca, faixa ≤ 1,2·Ø (NBR 6118 22.7.4.1.1)", faixa, 1200.0 * mi.diam_estaca, "mm"));
+        let _ = h_parede;
+    }
+    v
 }

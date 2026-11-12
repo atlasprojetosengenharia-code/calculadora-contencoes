@@ -179,13 +179,16 @@ fn area(phi_mm: f64) -> f64 {
 /// Escolhe n barras de Ø (2 a o que cabe em `largura`) com área ≥ `as_nec` (cm²).
 pub(crate) fn barras(as_nec: f64, largura: f64, cob: f64) -> (usize, f64) {
     for phi in [10.0, 12.5, 16.0, 20.0, 25.0] {
-        let cabe = ((((largura - 2.0 * cob - 0.01) * 1000.0 + 20.0) / (phi + 20.0)).floor() as usize).max(2);
+        // largura útil: cobrimento e estribo (Ø8) dos dois lados ; espaçamento livre mínimo da NBR 6118 18.3.2.2
+        let livre = crate::armadura::livre_minimo_mm(phi);
+        let util = (largura - 2.0 * cob - 0.016) * 1000.0;
+        let cabe = (((util + livre) / (phi + livre)).floor() as usize).max(2);
         let n = ((as_nec / area(phi)).ceil() as usize).max(2);
         if n <= cabe {
             return (n, phi);
         }
     }
-    let cabe = ((((largura - 2.0 * cob - 0.01) * 1000.0 + 20.0) / 45.0).floor() as usize).max(2);
+    let cabe = ((((largura - 2.0 * cob - 0.016) * 1000.0 + 25.0) / 50.0).floor() as usize).max(2);
     (cabe, 25.0)
 }
 
