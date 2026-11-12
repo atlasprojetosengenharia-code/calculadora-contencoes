@@ -95,6 +95,9 @@ impl MuroFlexao {
     }
 
     pub fn calcular(&self, fat: &Fatores) -> Resultado {
+        if self.sistema == Sistema::Misto && self.misto.fundacao_estacas() {
+            return self.calcular_estacas(fat);
+        }
         let mut r = Resultado::default();
         let (h, hs, bp, tb, tt) = (self.h, self.h_sapata, self.b_ponta, self.t_base, self.t_topo);
         let b = self.largura();
@@ -363,18 +366,18 @@ impl MuroFlexao {
                 forma: Forma::Reta,
             };
             tab.push(n1.clone());
-            let ac = d.n_canaleta as f64 * area(d.phi_canaleta);
+            let av = area(d.phi_vertical) * 100.0 / d.s_vertical;
             tab.push(Armadura {
                 pos: "N2".into(),
-                elemento: format!("Painel — horizontal nas canaletas grauteadas (a cada {} m)", fmt(mi.esp_canaleta)),
-                bitola_mm: d.phi_canaleta,
-                espac_cm: Some(100.0 * mi.esp_canaleta),
-                quantidade: format!("{} por canaleta", d.n_canaleta),
-                comprimento_m: mi.espac_pilar + 2.0 * lb(d.phi_canaleta, true) / 100.0,
-                as_nec: ac,
-                as_ef: ac,
-                unidade: "cm²",
-                lb_cm: lb(d.phi_canaleta, true),
+                elemento: "Painel — vertical nos furos grauteados (vãos entre vigas)".into(),
+                bitola_mm: d.phi_vertical,
+                espac_cm: Some(d.s_vertical),
+                quantidade: format!("{}/m", (100.0 / d.s_vertical).ceil()),
+                comprimento_m: h - hs - cob,
+                as_nec: av,
+                as_ef: av,
+                unidade: "cm²/m",
+                lb_cm: lb(d.phi_vertical, true),
                 forma: Forma::Reta,
             });
             let (eb, eh) = ((mi.pilar_b - 2.0 * cob).max(0.08), (mi.pilar_h - 2.0 * cob).max(0.08));
@@ -457,22 +460,7 @@ impl MuroFlexao {
             ..n1.clone()
         });
         if let Some(d) = dm {
-            // arranques verticais do painel junto à sapata (furos grauteados)
-            let a1 = std::f64::consts::PI * d.phi_vertical * d.phi_vertical / 400.0;
-            let lbv = lb(d.phi_vertical, true);
-            tab.push(Armadura {
-                pos: "N8".into(),
-                elemento: format!("Painel — arranques verticais grauteados (até {} m acima da sapata)", fmt(d.y_arranque)),
-                bitola_mm: d.phi_vertical,
-                espac_cm: Some(d.s_vertical),
-                quantidade: format!("{}/m", (100.0 / d.s_vertical).ceil()),
-                comprimento_m: (hs - cob) + d.y_arranque + lbv / 100.0,
-                as_nec: a1 * 100.0 / d.s_vertical,
-                as_ef: a1 * 100.0 / d.s_vertical,
-                unidade: "cm²/m",
-                lb_cm: lbv,
-                forma: Forma::EmL { longa: (hs - cob) + d.y_arranque + lbv / 100.0, curta: lbv / 100.0 },
-            });
+            tab.extend(armaduras_vigas(d, &self.misto, c));
         }
 
         // formas para o desenho das posições isoladas (coerentes com o esquema da seção)
@@ -661,6 +649,230 @@ impl MuroFlexao {
         d.nivel(xi, h, sz, format!("NÍVEL 02  +{}", fmt(h - self.df.max(0.0))));
         d
     }
+}
+
+
+impl MuroFlexao {
+    /// Muro misto em blocos sobre estacas: empuxo, painel, vigas, pilar, baldrame,
+    /// blocos e estacas (sem sapata corrida: não há tombamento/deslizamento da sapata).
+    fn calcular_estacas(&self, fat: &Fatores) -> Resultado {
+        use super::misto::H_RESPALDO;
+        let mut r = Resultado::default();
+        let c = &self.concreto;
+        let mi = &self.misto;
+        let (h, hs) = (self.h, self.h_sapata);
+        let hst = h - hs;
+        r.titulo("Dados");
+        r.linha(format!(
+            "Altura total {} m (altura livre + Df) ; viga baldrame {} × {} cm ; painel + respaldo {} m acima do baldrame",
+            fmt(h), fmt(100.0 * mi.baldrame_b), fmt(100.0 * mi.baldrame_h), fmt(hst)
+        ));
+        r.linha(format!(
+            "Teoria: {} ; δ = {}° ; β = {}° ; q = {} kPa — empuxo no plano do tardoz da parede",
+            self.empuxo.teoria.nome(), fmt(self.empuxo.delta), fmt(self.empuxo.beta), fmt(self.cargas.q_uniforme)
+        ));
+        let ph = |z: f64| self.empuxo.pressao_horizontal_total(&self.aterro, &self.cargas, 0.0, z);
+        let (v, sc) = integrar(ph, 0.0, hst, 400);
+        let m = v * (hst - sc);
+        r.formula(
+            "Empuxo sobre a parede (acima do baldrame)",
+            "E = ∫ p(z) dz ;  M = E·(Hp − zc)  (por metro)",
+            format!("Hp = {} m ;  p(topo) = {} kPa ;  p(base) = {} kPa ;  zc = {} m", fmt(hst), fmt(ph(0.0)), fmt(ph(hst)), fmt(sc)),
+            format!("E = {} kN/m ;  M = {} kN·m/m  (resultante a {} m da base ≈ H/3)", fmt(v), fmt(m), fmt(hst - sc)),
+        );
+        let p_y = |y: f64| ph((hst - y).max(0.0));
+        let mut dm = mi.dimensionar(&mut r, fat, c, m, v, &p_y, hst - H_RESPALDO);
+        mi.fundacao(&mut r, fat, c, m, v, ph(hst + hs / 2.0), hst, &mut dm);
+        r.aviso(
+            "Fundação em estacas: sem sapata corrida, não se aplicam tombamento, deslizamento e capacidade da sapata; a estabilidade local é a das estacas (compressão, tração e carga horizontal) e a global, a de Bishop.",
+        );
+        self.detalhamento_estacas(&mut r, &dm);
+        self.cargas.avisar_minima(&mut r, fat.sobrecarga_minima);
+        r.desenho = self.desenho_estacas(&dm);
+        r
+    }
+
+    fn detalhamento_estacas(&self, r: &mut Resultado, d: &DimMisto) {
+        let c = &self.concreto;
+        let mi = &self.misto;
+        let (h, hs) = (self.h, self.h_sapata);
+        let cob = c.cobrimento;
+        let lb = |phi: f64| armadura::lb_basico(phi, c.fck, c.fyk, 1.4, 1.15, true);
+        let area = |phi: f64| std::f64::consts::PI * phi * phi / 400.0;
+        r.titulo("Detalhamento construtivo — muro misto em blocos sobre estacas");
+        r.norma(normas::NBR6118_ANCORAGEM);
+        let mut tab = vec![
+            Armadura {
+                pos: "N1".into(),
+                elemento: "Pilar — longitudinal (face do aterro)".into(),
+                bitola_mm: d.phi_pilar,
+                espac_cm: None,
+                quantidade: format!("{} por pilar", d.n_barras),
+                comprimento_m: h - hs - cob + lb(d.phi_pilar) / 100.0,
+                as_nec: d.as_pilar,
+                as_ef: d.n_barras as f64 * area(d.phi_pilar),
+                unidade: "cm²",
+                lb_cm: lb(d.phi_pilar),
+                forma: Forma::Reta,
+            },
+            Armadura {
+                pos: "N2".into(),
+                elemento: "Painel — vertical nos furos grauteados (vãos entre vigas)".into(),
+                bitola_mm: d.phi_vertical,
+                espac_cm: Some(d.s_vertical),
+                quantidade: format!("{}/m", (100.0 / d.s_vertical).ceil()),
+                comprimento_m: h - hs - cob,
+                as_nec: area(d.phi_vertical) * 100.0 / d.s_vertical,
+                as_ef: area(d.phi_vertical) * 100.0 / d.s_vertical,
+                unidade: "cm²/m",
+                lb_cm: lb(d.phi_vertical),
+                forma: Forma::Reta,
+            },
+        ];
+        let (eb, eh) = ((mi.pilar_b - 2.0 * cob).max(0.08), (mi.pilar_h - 2.0 * cob).max(0.08));
+        tab.push(Armadura {
+            pos: "N3".into(),
+            elemento: "Pilar — estribos (2 ramos)".into(),
+            bitola_mm: d.phi_estribo,
+            espac_cm: Some(d.s_estribo),
+            quantidade: format!("{} por pilar", ((h - hs) * 100.0 / d.s_estribo).ceil()),
+            comprimento_m: 2.0 * (eb + eh) + 2.0 * armadura::gancho_estribo_cm(d.phi_estribo) / 100.0,
+            as_nec: 0.0,
+            as_ef: 0.0,
+            unidade: "cm²/m",
+            lb_cm: 0.0,
+            forma: Forma::Estribo { b: eb, h: eh },
+        });
+        tab.extend(armaduras_vigas(d, mi, c));
+        r.linha(format!(
+            "Pilares {} × {} cm a cada {} m ; {} viga(s) intermediária(s) {} × {} cm ; viga de respaldo em canaleta ; baldrame {} × {} cm.",
+            fmt(100.0 * mi.pilar_b),
+            fmt(100.0 * mi.pilar_h),
+            fmt(mi.espac_pilar),
+            d.vigas.len(),
+            fmt(100.0 * mi.viga_h),
+            fmt(100.0 * mi.viga_b),
+            fmt(100.0 * mi.baldrame_b),
+            fmt(100.0 * mi.baldrame_h)
+        ));
+        if let Some(e) = &d.estacas {
+            r.linha(format!(
+                "Blocos {} × {} × {} m sobre 2 estacas escavadas Ø{} cm, L = {} m, a {} m entre eixos (perpendicular ao muro).",
+                fmt(e.bloco[0]), fmt(e.bloco[1]), fmt(e.bloco[2]), fmt(100.0 * mi.diam_estaca), fmt(e.comprimento), fmt(e.e)
+            ));
+        }
+        r.linha("Arranques dos pilares ancorados no bloco com dobra de 90°; vigas intermediárias ancoradas nos pilares (lb) e concretadas junto com o painel em fiadas de canaleta ou formas.");
+        r.armaduras.extend(tab);
+    }
+
+    /// Seção pelo pilar: baldrame, bloco e estacas, painel, vigas e pilar.
+    fn desenho_estacas(&self, d_m: &DimMisto) -> Desenho {
+        let mut d = Desenho::default();
+        let mi = &self.misto;
+        let (h, hs) = (self.h, self.h_sapata);
+        let (e, lb, _, hb) = mi.geometria_bloco();
+        let l_est = d_m.estacas.as_ref().map(|e| e.comprimento).unwrap_or(4.0);
+        let xc = mi.pilar_h / 2.0;
+        let y_bloco = hs - hb;
+        let fundo = y_bloco - l_est - 0.5;
+        let xe = mi.baldrame_b.max(lb) + 1.2 * h;
+        let xi = -0.5 * h - 0.5;
+        d.retangulo(Estilo::SoloFundacao, xi, fundo, xe, 0.0);
+        if self.df > 0.0 {
+            d.retangulo(Estilo::Solo, xi, 0.0, 0.0, self.df);
+        }
+        let tardoz = if self.reaterro { Estilo::Reaterro } else { Estilo::Solo };
+        let t = mi.bloco;
+        d.poli(tardoz, vec![[mi.baldrame_b.max(t), 0.0], [xe, 0.0], [xe, h], [t, h], [t, hs], [mi.baldrame_b.max(t), hs]]);
+        // bloco e estacas (no eixo do pilar)
+        d.retangulo(Estilo::Concreto, xc - lb / 2.0, y_bloco, xc + lb / 2.0, hs);
+        for s in [-1.0, 1.0] {
+            let x = xc + s * e / 2.0;
+            d.retangulo(Estilo::Concreto, x - mi.diam_estaca / 2.0, y_bloco - l_est, x + mi.diam_estaca / 2.0, y_bloco);
+        }
+        d.retangulo(Estilo::Concreto, 0.0, 0.0, mi.baldrame_b, hs);
+        // pilar (no corte), painel em projeção atrás, vigas e respaldo
+        d.poli(Estilo::Concreto, vec![[0.0, hs], [mi.pilar_h, hs], [mi.pilar_h, h], [0.0, h]]);
+        for v in &d_m.vigas {
+            let y = hs + v.y;
+            d.retangulo(Estilo::Concreto, 0.0, y - mi.viga_h / 2.0, mi.viga_b.max(mi.pilar_h), y + mi.viga_h / 2.0);
+            d.texto([mi.viga_b.max(mi.pilar_h) + 0.08, y], format!("viga intermediária a {} m", fmt(v.y)));
+        }
+        d.texto([mi.pilar_h + 0.08, h - 0.1], "viga de respaldo");
+        d.texto([xc + lb / 2.0 + 0.1, y_bloco + hb / 2.0], format!("bloco {}×{}×{} m", fmt(lb), fmt(mi.geometria_bloco().2), fmt(hb)));
+        d.texto([xc + e / 2.0 + 0.3, y_bloco - 0.5 * l_est], format!("2 estacas Ø{} cm, L = {} m", fmt(100.0 * mi.diam_estaca), fmt(l_est)));
+        d.texto([mi.baldrame_b + 0.1, hs * 0.5], "baldrame");
+        d.tracejada(Estilo::Cota, vec![[mi.pilar_h, 0.0], [mi.pilar_h, h]]);
+        d
+    }
+}
+
+/// Armaduras das vigas intermediárias, do baldrame, das estacas e do bloco.
+fn armaduras_vigas(d: &DimMisto, mi: &Misto, c: &Concreto) -> Vec<Armadura> {
+    let lb = |phi: f64| armadura::lb_basico(phi, c.fck, c.fyk, 1.4, 1.15, true);
+    let area = |phi: f64| std::f64::consts::PI * phi * phi / 400.0;
+    let cob = c.cobrimento;
+    let mut v = Vec::new();
+    if let Some(maior) = d.vigas.iter().max_by(|a, b| (a.n as f64 * area(a.phi)).total_cmp(&(b.n as f64 * area(b.phi)))) {
+        v.push(Armadura {
+            pos: "N8".into(),
+            elemento: format!("Vigas intermediárias ({}) — longitudinal, por face", d.vigas.len()),
+            bitola_mm: maior.phi,
+            espac_cm: None,
+            quantidade: format!("{} por face", maior.n),
+            comprimento_m: mi.espac_pilar + 2.0 * lb(maior.phi) / 100.0,
+            as_nec: maior.n as f64 * area(maior.phi),
+            as_ef: maior.n as f64 * area(maior.phi),
+            unidade: "cm²",
+            lb_cm: lb(maior.phi),
+            forma: Forma::Reta,
+        });
+    }
+    if let Some(e) = &d.estacas {
+        v.push(Armadura {
+            pos: "N9".into(),
+            elemento: "Viga baldrame — longitudinal, por face".into(),
+            bitola_mm: d.baldrame_phi,
+            espac_cm: None,
+            quantidade: format!("{} por face", d.baldrame_n),
+            comprimento_m: mi.espac_pilar + 2.0 * lb(d.baldrame_phi) / 100.0,
+            as_nec: d.baldrame_n as f64 * area(d.baldrame_phi),
+            as_ef: d.baldrame_n as f64 * area(d.baldrame_phi),
+            unidade: "cm²",
+            lb_cm: lb(d.baldrame_phi),
+            forma: Forma::Reta,
+        });
+        let l_arm = e.comprimento.min(4.0).max(3.0);
+        v.push(Armadura {
+            pos: "N10".into(),
+            elemento: format!("Estaca escavada Ø{} cm — longitudinal (trecho armado)", fmt(100.0 * mi.diam_estaca)),
+            bitola_mm: 12.5,
+            espac_cm: None,
+            quantidade: "5 por estaca".into(),
+            comprimento_m: l_arm + lb(12.5) / 100.0,
+            as_nec: 5.0 * area(12.5),
+            as_ef: 5.0 * area(12.5),
+            unidade: "cm²",
+            lb_cm: lb(12.5),
+            forma: Forma::Reta,
+        });
+        let [lbl, bbl, _] = e.bloco;
+        let (n, phi) = super::misto::barras(e.as_bloco, bbl, cob);
+        v.push(Armadura {
+            pos: "N11".into(),
+            elemento: "Bloco — tirante inferior sobre as estacas".into(),
+            bitola_mm: phi,
+            espac_cm: None,
+            quantidade: format!("{n} por bloco"),
+            comprimento_m: lbl - 2.0 * cob + 2.0 * armadura::gancho_reto_cm(phi) / 100.0,
+            as_nec: e.as_bloco,
+            as_ef: n as f64 * area(phi),
+            unidade: "cm²",
+            lb_cm: lb(phi),
+            forma: Forma::EmU { vao: lbl - 2.0 * cob, perna: armadura::gancho_reto_cm(phi) / 100.0 },
+        });
+    }
+    v
 }
 
 #[cfg(test)]

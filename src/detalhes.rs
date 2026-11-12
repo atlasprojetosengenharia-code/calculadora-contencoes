@@ -9,6 +9,8 @@ use crate::resultado::{fmt, Desenho, Resultado, Estilo};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Detalhe {
+    /// Vista superior do muro misto (pilares, blocos e estacas).
+    PlantaMisto,
     Canaleta,
     Barbaca,
     CabecaGrampo,
@@ -21,6 +23,7 @@ fn lista(proj: &Projeto) -> Vec<Detalhe> {
     let dr = &proj.drenagem;
     let mut v = Vec::new();
     match proj.tipo {
+        TipoContencao::Flexao if proj.flexao.sistema == crate::tipos::misto::Sistema::Misto => v.push(Detalhe::PlantaMisto),
         TipoContencao::Grampeado => {
             v.push(Detalhe::CabecaGrampo);
             v.push(Detalhe::SecaoGrampo);
@@ -49,6 +52,7 @@ pub fn existem(proj: &Projeto) -> bool {
 
 fn desenhar_item(d: &mut Desenho, det: Detalhe, cx: f64, cy: f64, k: f64, proj: &Projeto, res: &Resultado) {
     match det {
+        Detalhe::PlantaMisto => proj.preparar_flexao().misto.planta(d, cx, cy, k),
         Detalhe::Canaleta => canaleta(d, cx, cy, k),
         Detalhe::Barbaca => barbaca(d, cx, cy, k, &proj.drenagem),
         Detalhe::CabecaGrampo => cabeca_grampo(d, cx, cy, k, proj),

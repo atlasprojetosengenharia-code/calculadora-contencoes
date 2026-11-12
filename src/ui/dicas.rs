@@ -115,7 +115,12 @@ fn texto(r: &str) -> Option<&'static str> {
         "Espaçamento entre pilares (eixos)" => "Cada pilar recebe o empuxo da faixa entre eixos; o painel vence o vão livre entre pilares. Espaçamento \n            maior economiza pilares, mas aumenta o momento no pilar e, com o quadrado do vão, no painel.",
         "Largura do pilar (ao longo do muro)" => "Largura da seção do pilar no sentido do muro (bw no cortante). Usual 30 a 40 cm.",
         "Altura da seção do pilar (para o aterro)" => "Altura da seção do pilar, perpendicular ao muro (braço de alavanca). Face externa alinhada ao painel; o restante avança no aterro.",
-        "Canaletas armadas a cada" => "Espaçamento vertical das fiadas de canaletas grauteadas com armadura horizontal (múltiplo de 20 cm). Menor espaçamento = mais aço no painel.",
+        "Vigas intermediárias: largura (para o aterro)" => "Largura da seção das vigas intermediárias, perpendicular ao muro: é o braço de alavanca na flexão horizontal entre pilares. As vigas são distribuídas pela carga (mais próximas embaixo).",
+        "Vigas intermediárias: altura" => "Altura (vertical) das vigas intermediárias; usual 30 cm ou uma canaleta grauteada de 19 cm com forma complementar.",
+        "Fundação do muro misto" => "Blocos sobre estacas sob cada pilar, ligados pela viga baldrame (usual no muro misto), ou sapata corrida. Nas estacas, o momento do pilar vira um binário de compressão e tração nas 2 estacas do bloco.",
+        "Viga baldrame: largura" => "Viga de embasamento que liga os blocos e apoia o painel; recebe o peso da alvenaria (flexão vertical entre blocos) e a faixa inferior do empuxo.",
+        "Viga baldrame: altura" => "Altura da viga baldrame; o topo fica na cota de assentamento do painel.",
+        "Diâmetro das estacas" => "Estacas escavadas (trado). O comprimento é o menor que atende à compressão e à tração pelo método Décourt-Quaresma com o SPT da sondagem.",
         "Espessura da sapata" => "Altura da laje de base. Marchetti: 8 a 10 % de H. Resiste aos momentos na ponta e no talão.",
         "Comprimento da ponta" => "Laje à frente da parede. Marchetti: 10 a 12 % de H. Aumenta o braço estabilizante e reduz a \
             tensão máxima na borda da base.",

@@ -93,7 +93,20 @@ pub fn custo(p: &Projeto) -> f64 {
                 // canaletas) + pilares em concreto armado distribuídos no espaçamento
                 crate::tipos::misto::Sistema::Misto => {
                     let mi = &m.misto;
-                    0.7 * mi.bloco * hp + 1.6 * mi.pilar_b * mi.pilar_h * hp / mi.espac_pilar.max(0.5)
+                    let s = mi.espac_pilar.max(0.5);
+                    let mut c = 0.7 * mi.bloco * hp + 1.6 * mi.pilar_b * mi.pilar_h * hp / s;
+                    if mi.fundacao_estacas() {
+                        // vigas intermediárias (contagem pelo resultado), blocos e 2 estacas por pilar
+                        let r = p.calcular_local();
+                        let n_vigas = r.armaduras.iter().find(|a| a.elemento.starts_with("Vigas intermediárias")).map(|a| {
+                            a.elemento.split(['(', ')']).nth(1).and_then(|x| x.trim().parse::<f64>().ok()).unwrap_or(1.0)
+                        }).unwrap_or(0.0);
+                        let l_est = r.verificacoes.iter().find(|v| v.nome.starts_with("Estaca: comprimento")).map(|v| v.valor).unwrap_or(6.0);
+                        let (_, lb, bb, hb) = mi.geometria_bloco();
+                        let ap = std::f64::consts::PI * mi.diam_estaca * mi.diam_estaca / 4.0;
+                        c += 1.6 * mi.viga_b * mi.viga_h * n_vigas + 1.6 * (lb * bb * hb + 2.0 * ap * l_est) / s;
+                    }
+                    c
                 }
                 _ => 1.6 * 0.5 * (m.t_topo + m.t_base) * hp,
             };
@@ -161,14 +174,25 @@ fn ajustar_estrutura(p: &mut Projeto) {
                     ch = true;
                 }
                 if tem("Painel") {
-                    if mi.esp_canaleta > 0.21 {
-                        mi.esp_canaleta = 0.20;
-                        ch = true;
-                    } else if mi.bloco < 0.19 {
+                    if mi.bloco < 0.19 {
                         mi.bloco = 0.19;
                         ch = true;
                     } else if let Some(f) = crate::tipos::misto::FBK.iter().find(|f| **f > mi.fbk + 1e-9) {
                         mi.fbk = *f;
+                        ch = true;
+                    }
+                }
+                if tem("Vigas intermediárias") && mi.viga_b < 0.60 {
+                    mi.viga_b = crate::projeto::arred(mi.viga_b + 0.05);
+                    ch = true;
+                }
+                if tem("Viga baldrame") && mi.baldrame_h < 1.0 {
+                    mi.baldrame_h = crate::projeto::arred(mi.baldrame_h + 0.10);
+                    ch = true;
+                }
+                if tem("Estaca") && !tem("comprimento") {
+                    if let Some(d) = crate::tipos::misto::DIAM_ESTACA.iter().find(|d| **d > mi.diam_estaca + 1e-9) {
+                        mi.diam_estaca = *d;
                         ch = true;
                     }
                 }
@@ -233,6 +257,21 @@ fn candidatos(base: &Projeto) -> Vec<(Projeto, String)> {
     let h = base.geometria.h;
     let mut v: Vec<(Projeto, String)> = Vec::new();
     match base.tipo {
+        TipoContencao::Flexao if base.flexao.sistema == crate::tipos::misto::Sistema::Misto && base.flexao.misto.fundacao_estacas() => {
+            // misto em estacas: espaçamento dos pilares, diâmetro das estacas e embutimento
+            for s in [1.5, 2.0, 2.5, 3.0] {
+                for d in crate::tipos::misto::DIAM_ESTACA {
+                    for embut in [0.0, 0.5] {
+                        let mut p = base.clone();
+                        p.flexao.misto.espac_pilar = s;
+                        p.flexao.misto.diam_estaca = d;
+                        p.geometria.engaste += embut;
+                        let emb = if embut > 0.0 { format!(" ; embutimento {} m", fmt(p.geometria.engaste)) } else { String::new() };
+                        v.push((p, format!("pilares a cada {} m ; estacas Ø{} cm{emb}", fmt(s), fmt(100.0 * d))));
+                    }
+                }
+            }
+        }
         TipoContencao::Gravidade | TipoContencao::Flexao => {
             let flexao = base.tipo == TipoContencao::Flexao;
             for k in [0.40, 0.50, 0.60, 0.70, 0.80, 0.90, 1.00] {

@@ -101,6 +101,8 @@ pub enum Classe {
     Canaleta,
     /// Viga de travamento (longarina) de parede ancorada.
     Viga,
+    /// Bloco de coroamento sobre estacas.
+    Bloco,
     /// Pilar de concreto armado (muro misto).
     Pilar,
 }
@@ -435,7 +437,51 @@ impl Modelo3d {
                         },
                     });
                 }
-                if fx.dente && fx.dente_h > 0.0 {
+                // vigas intermediárias (mesma distribuição do cálculo), na frente do painel por 3 mm
+                {
+                    let hst = ht - hs;
+                    let ph = |zz: f64| fx.empuxo.pressao_horizontal_total(&fx.aterro, &fx.cargas, 0.0, zz);
+                    let p_y = |y: f64| ph((hst - y).max(0.0));
+                    let niveis = mi.niveis_vigas(&p_y, hst - hv, 1.4, fx.concreto.fyk / 1.15);
+                    for y in niveis {
+                        let (y0, y1) = (hs + y - mi.viga_h / 2.0, hs + y + mi.viga_h / 2.0);
+                        md.pecas.push(Peca {
+                            nome: format!("Viga intermediária a {} m (concreto armado)", crate::resultado::fmt(y)),
+                            classe: Classe::Viga,
+                            material: Material::Concreto,
+                            forma: ext(&vec![[bp - 0.003, y0], [bp + mi.viga_b, y0], [bp + mi.viga_b, y1], [bp - 0.003, y1]]),
+                        });
+                    }
+                }
+                if mi.fundacao_estacas() {
+                    // blocos sobre 2 estacas sob cada pilar (estacas alinhadas perpendicularmente ao muro)
+                    let (e, lb, bb, hbl) = mi.geometria_bloco();
+                    let l_est = r.verificacoes.iter().find(|v| v.nome.starts_with("Estaca: comprimento")).map(|v| v.valor).unwrap_or(6.0);
+                    let xc = bp + mi.pilar_h / 2.0;
+                    amplia(xc - lb / 2.0);
+                    amplia(xc + lb / 2.0);
+                    for (k, z) in posicoes(l, mi.espac_pilar).into_iter().enumerate() {
+                        md.pecas.push(Peca {
+                            nome: format!("Bloco B{} {} × {} × {} m", k + 1, crate::resultado::fmt(lb), crate::resultado::fmt(bb), crate::resultado::fmt(hbl)),
+                            classe: Classe::Bloco,
+                            material: Material::Concreto,
+                            forma: Forma::Extrusao {
+                                secao: vec![[xc - lb / 2.0, hs - hbl], [xc + lb / 2.0, hs - hbl], [xc + lb / 2.0, hs - 0.001], [xc - lb / 2.0, hs - 0.001]],
+                                z0: (z - bb / 2.0).max(0.0),
+                                z1: (z + bb / 2.0).min(l),
+                            },
+                        });
+                        for (j, sx) in [-1.0, 1.0].into_iter().enumerate() {
+                            md.pecas.push(Peca {
+                                nome: format!("Estaca escavada Ø{} cm, L = {} m — B{} E{}", fmt0(100.0 * mi.diam_estaca), crate::resultado::fmt(l_est), k + 1, j + 1),
+                                classe: Classe::Estaca,
+                                material: Material::Concreto,
+                                forma: Forma::Vertical { planta: circulo(xc + sx * e / 2.0, z, mi.diam_estaca, 16), y0: hs - hbl - l_est, y1: hs - hbl },
+                            });
+                        }
+                    }
+                }
+                if !mi.fundacao_estacas() && fx.dente && fx.dente_h > 0.0 {
                     let xc = bp + fx.t_base / 2.0;
                     md.pecas.push(Peca {
                         nome: "Dente de base (concreto armado)".into(),
@@ -619,7 +665,8 @@ impl Modelo3d {
         for pc in &self.pecas {
             match &pc.forma {
                 Forma::Extrusao { secao, z0, z1: zf } if *z0 < 1e-6 && (*zf - l).abs() < 1e-6 => obst.push(secao.clone()),
-                Forma::Vertical { planta, y0, y1 } => {
+                // estacas isoladas (muro misto) não abrem vala contínua no solo
+                Forma::Vertical { planta, y0, y1 } if !(p.tipo == TipoContencao::Flexao && pc.classe == Classe::Estaca) => {
                     let (a, b) = planta.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), q| (a.min(q[0]), b.max(q[0])));
                     obst.push(vec![[a, *y0], [b, *y0], [b, *y1], [a, *y1]]);
                 }

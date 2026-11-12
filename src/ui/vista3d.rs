@@ -503,6 +503,10 @@ mod amostra_misto {
         p.flexao.sistema = crate::tipos::misto::Sistema::Misto;
         p.flexao.misto.espac_pilar = 2.0;
         let r = p.calcular();
+        std::fs::write(format!("{pasta}/misto_secao.png"), crate::raster::desenho_png(&r.desenho, 1000, crate::raster::altura_para(&r.desenho, 1000))).unwrap();
+        let mut pl = crate::resultado::Desenho::default();
+        p.preparar_flexao().misto.planta(&mut pl, 0.0, 0.0, 1.0);
+        std::fs::write(format!("{pasta}/misto_planta.png"), crate::raster::desenho_png(&pl, 1000, crate::raster::altura_para(&pl, 1000))).unwrap();
         for (v, corte, az, el) in [("frente", false, 0.85f32, 0.30f32), ("corte", true, 0.35, 0.35)] {
             let cena = Cena::montar(1, Modelo3d::montar(&p, &r, 9.0, corte));
             let img = cena.rasterizar(900, 600, &Camera { azimute: az, elevacao: el, zoom: 1.2, corte, ..Camera::default() }, Color32::from_rgb(236, 240, 245), 1.0);

@@ -569,6 +569,16 @@ impl Projeto {
             let t = m.misto.t_equivalente();
             m.t_topo = t;
             m.t_base = t;
+            if m.misto.fundacao_estacas() {
+                // sem sapata corrida: a "base" é a viga baldrame
+                m.h_sapata = m.misto.baldrame_h;
+                m.b_ponta = 0.0;
+                m.b_talao = (m.misto.baldrame_b - t).max(0.0);
+                m.dente = false;
+            }
+            // perfil SPT e cota do topo da fundação para as estacas
+            m.misto.spt = self.sondagem.camadas_calc().iter().map(|c| (c.ate, c.nspt, c.tipo)).collect();
+            m.misto.z_topo = m.h - m.h_sapata;
         }
         m.df = self.geometria.engaste;
         m.aterro = self.perfil_calc();

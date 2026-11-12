@@ -69,6 +69,9 @@ pub struct Modelo {
     pub x_corte: f64,
     pub y_corte: f64,
     pub reforcos: Vec<Reforco>,
+    /// Estacas verticais que a superfície pode cruzar: (topo, comprimento, resistência ao
+    /// cisalhamento por metro de contenção, kN/m) — somada ao momento resistente.
+    pub estacas: Vec<([f64; 2], f64, f64)>,
     /// Domínio horizontal e escala de busca.
     pub x_dom: (f64, f64),
     pub centros_x: (f64, f64),
@@ -230,6 +233,15 @@ impl Modelo {
                 let tr = (rf.arr_por_m * ancorado).min(rf.aco);
                 let braco = (px * rf.dir[1] - py * rf.dir[0]).abs();
                 extra += tr * braco / r;
+            }
+        }
+        // estacas cruzadas pelo arco: resistência ao cisalhamento do fuste, tangente à superfície
+        for &(topo, comp, res) in &self.estacas {
+            if let Some(y) = ybot(topo[0]) {
+                if y < topo[1] && y > topo[1] - comp {
+                    extra += res;
+                    interceptados += 1;
+                }
             }
         }
         let mut fs = 1.5;
@@ -395,6 +407,7 @@ impl Projeto {
             x_corte: 0.0,
             y_corte: 0.0,
             reforcos: reforcos.to_vec(),
+            estacas: vec![],
             x_dom: (0.0, 1.0),
             centros_x: (0.0, 1.0),
             y_topo: 0.0,
@@ -514,9 +527,30 @@ impl Projeto {
     }
 
     /// Seção do cálculo de estabilidade global (geometria da contenção, terreno e reforços).
+    /// Estacas do muro misto para a estabilidade global: 2 por bloco, a cada espaçamento;
+    /// resistência ao cisalhamento do fuste (característica, sem armadura transversal)
+    /// distribuída por metro de muro.
+    fn estacas_misto(&self, r: &Resultado) -> Vec<([f64; 2], f64, f64)> {
+        if self.tipo != TipoContencao::Flexao || self.flexao.sistema != crate::tipos::misto::Sistema::Misto || !self.flexao.misto.fundacao_estacas() {
+            return vec![];
+        }
+        let fx = self.preparar_flexao();
+        let mi = &fx.misto;
+        let Some(l) = r.verificacoes.iter().find(|v| v.nome.starts_with("Estaca: comprimento")).map(|v| v.valor) else { return vec![] };
+        let (e, _, _, hb) = mi.geometria_bloco();
+        let d = mi.diam_estaca;
+        let fctk = 0.21 * fx.concreto.fck.powf(2.0 / 3.0);
+        let v_estaca = 0.25 * fctk * 1.2 * (0.8 * d) * d * 1000.0; // kN
+        let por_m = v_estaca / mi.espac_pilar.max(0.5);
+        let xc = fx.b_ponta + mi.pilar_h / 2.0;
+        [-1.0, 1.0].iter().map(|s| ([xc + s * e / 2.0, fx.h_sapata - hb], l, por_m)).collect()
+    }
+
     pub fn secao_global(&self, r: &Resultado) -> Modelo {
         let ficha = r.verificacoes.iter().find(|v| v.nome.starts_with("Ficha de projeto")).map(|v| v.valor);
-        self.modelo_global(&r.reforcos, ficha)
+        let mut m = self.modelo_global(&r.reforcos, ficha);
+        m.estacas = self.estacas_misto(r);
+        m
     }
 
     /// Verifica a estabilidade global e a registra no memorial, no desenho e nas verificações.
@@ -524,9 +558,17 @@ impl Projeto {
         let f: &Fatores = &self.fatores;
         let ficha = r.verificacoes.iter().find(|v| v.nome.starts_with("Ficha de projeto")).map(|v| v.valor);
         let reforcos = r.reforcos.clone();
-        let m = self.modelo_global(&reforcos, ficha);
+        let mut m = self.modelo_global(&reforcos, ficha);
+        m.estacas = self.estacas_misto(r);
         let fs_min = f.fs_global();
         r.titulo("Estabilidade global — equilíbrio limite (NBR 11682)");
+        if let Some(&(_, l, res)) = m.estacas.first() {
+            r.linha(format!(
+                "Estacas: onde a superfície cruza o fuste (L = {} m), soma-se a resistência característica ao cisalhamento das estacas, {} kN/m por fila (sem armadura transversal), ao momento resistente.",
+                fmt(l),
+                fmt(res)
+            ));
+        }
         r.norma(crate::normas::NBR11682_TAB3);
         let com_reforco = !reforcos.is_empty();
         let Some(glob) = m.buscar(false) else {
@@ -612,6 +654,7 @@ mod testes {
             x_corte: 0.0,
             y_corte: 0.0,
             reforcos: vec![],
+            estacas: vec![],
             x_dom: (-30.0, h / tb + 30.0),
             centros_x: (-2.0, h / tb + 6.0),
             y_topo: h,

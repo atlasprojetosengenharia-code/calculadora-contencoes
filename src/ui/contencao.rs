@@ -516,7 +516,7 @@ fn det_gravidade(ui: &mut egui::Ui, m: &mut MuroGravidade, h: f64) {
 }
 
 fn det_flexao(ui: &mut egui::Ui, m: &mut MuroFlexao) {
-    use crate::tipos::misto::{Sistema, BLOCOS, FBK};
+    use crate::tipos::misto::{FundacaoMisto, Sistema, BLOCOS, DIAM_ESTACA, FBK};
     ui.horizontal_wrapped(|ui| {
         super::widgets::rotulo(ui, "Sistema estrutural");
         egui::ComboBox::from_id_salt("sistema_flexao").selected_text(m.sistema.nome()).width(300.0).show_ui(ui, |ui| {
@@ -548,10 +548,31 @@ fn det_flexao(ui: &mut egui::Ui, m: &mut MuroFlexao) {
             num(ui, "Espaçamento entre pilares (eixos)", &mut mi.espac_pilar, "m", 1.5..=6.0, 0.05);
             num(ui, "Largura do pilar (ao longo do muro)", &mut mi.pilar_b, "m", 0.14..=0.80, 0.01);
             num(ui, "Altura da seção do pilar (para o aterro)", &mut mi.pilar_h, "m", 0.14..=1.20, 0.01);
-            num(ui, "Canaletas armadas a cada", &mut mi.esp_canaleta, "m", 0.20..=1.20, 0.20);
+            num(ui, "Vigas intermediárias: largura (para o aterro)", &mut mi.viga_b, "m", 0.14..=0.80, 0.01);
+            num(ui, "Vigas intermediárias: altura", &mut mi.viga_h, "m", 0.19..=0.80, 0.01);
+            super::widgets::rotulo(ui, "Fundação do muro misto");
+            egui::ComboBox::from_id_salt("fund_misto").selected_text(mi.fundacao.nome()).width(240.0).show_ui(ui, |ui| {
+                for f in [FundacaoMisto::Estacas, FundacaoMisto::Sapata] {
+                    ui.selectable_value(&mut mi.fundacao, f, f.nome());
+                }
+            });
+            ui.end_row();
+            if mi.fundacao == FundacaoMisto::Estacas {
+                num(ui, "Viga baldrame: largura", &mut mi.baldrame_b, "m", 0.14..=1.00, 0.01);
+                num(ui, "Viga baldrame: altura", &mut mi.baldrame_h, "m", 0.25..=1.20, 0.01);
+                super::widgets::rotulo(ui, "Diâmetro das estacas");
+                egui::ComboBox::from_id_salt("diam_est_misto").selected_text(format!("{} cm", fmt(100.0 * mi.diam_estaca))).width(120.0).show_ui(ui, |ui| {
+                    for d in DIAM_ESTACA {
+                        ui.selectable_value(&mut mi.diam_estaca, d, format!("{} cm", fmt(100.0 * d)));
+                    }
+                });
+                ui.end_row();
+            }
         });
         ui.label(RichText::new("Na estabilidade, a parede entra com espessura e peso equivalentes (blocos + pilares distribuídos).").small().color(tema::de(ui).fraco));
     }
+    let estacas = m.sistema == Sistema::Misto && m.misto.fundacao == FundacaoMisto::Estacas;
+    if !estacas {
     grade(ui, "flex", |ui| {
         if m.sistema == Sistema::ConcretoArmado {
             num(ui, "Espessura da parede (topo)", &mut m.t_topo, "m", 0.12..=1.5, 0.01);
@@ -564,6 +585,7 @@ fn det_flexao(ui: &mut egui::Ui, m: &mut MuroFlexao) {
     passivo_subpressao(ui, &mut m.considerar_passivo, &mut m.frac_passivo, &mut m.subpressao);
     dente_ui(ui, &mut m.dente, &mut m.dente_h, &mut m.dente_b);
     fundacao(ui, &mut m.fundacao, "na cota da base (z = H)");
+    }
     concreto(ui, "flex_c", &mut m.concreto);
 }
 
