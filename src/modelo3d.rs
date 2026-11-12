@@ -439,10 +439,7 @@ impl Modelo3d {
                 }
                 // vigas intermediárias (mesma distribuição do cálculo), na frente do painel por 3 mm
                 {
-                    let hst = ht - hs;
-                    let ph = |zz: f64| fx.empuxo.pressao_horizontal_total(&fx.aterro, &fx.cargas, 0.0, zz);
-                    let p_y = |y: f64| ph((hst - y).max(0.0));
-                    let niveis = mi.niveis_vigas(&p_y, hst - hv, 1.4, fx.concreto.fyk / 1.15);
+                    let niveis: Vec<f64> = p.niveis_vigas_misto().into_iter().map(|y| y - hs).collect();
                     for y in niveis {
                         let (y0, y1) = (hs + y - mi.viga_h / 2.0, hs + y + mi.viga_h / 2.0);
                         md.pecas.push(Peca {
@@ -878,11 +875,38 @@ impl Modelo3d {
         let gd = p.geo_drenagem();
         let d_barb = (dr.diam_barbaca_mm / 1000.0).max(0.04);
         let bolsa_c = crate::drenagem::BOLSA_COMP;
+        // muro misto: barbacãs só nos panos de alvenaria, entre as faces dos pilares (folga de 15 cm)
+        let panos: Option<Vec<(f64, f64)>> = (p.tipo == TipoContencao::Flexao && p.flexao.sistema == crate::tipos::misto::Sistema::Misto).then(|| {
+            let mi = &p.flexao.misto;
+            let mut faces = vec![0.0];
+            for z in posicoes(l, mi.espac_pilar) {
+                faces.push(z - mi.pilar_b / 2.0);
+                faces.push(z + mi.pilar_b / 2.0);
+            }
+            faces.push(l);
+            faces.chunks(2).filter_map(|c| (c.len() == 2 && c[1] - c[0] > 0.40).then(|| (c[0] + 0.15, c[1] - 0.15))).collect()
+        });
+        let posicoes_fila = |i: usize| -> Vec<f64> {
+            match &panos {
+                // em cada pano: barbacãs igualmente espaçados (≈ Sh), desencontrados meio passo nas filas ímpares
+                Some(ps) => ps
+                    .iter()
+                    .flat_map(|&(a, b)| {
+                        let n = ((b - a) / dr.esp_h).ceil().max(1.0) as usize;
+                        let passo = (b - a) / n as f64;
+                        let desl = if i % 2 == 1 && n > 1 { 0.5 } else { 0.0 };
+                        (0..n).map(move |k| a + passo * (k as f64 + 0.5 + desl)).filter(move |z| *z < b + 1e-9)
+                    })
+                    .collect(),
+                None => {
+                    let desl = if i % 2 == 1 { dr.esp_h / 2.0 } else { 0.0 };
+                    posicoes(l, dr.esp_h).into_iter().map(|z| z + desl).collect()
+                }
+            }
+        };
         for (i, (t, f)) in gd.barbacas.iter().enumerate() {
             // o tubo já entra 20 cm no maciço e sai 15 cm da face (geo_drenagem)
-            let desl = if i % 2 == 1 { dr.esp_h / 2.0 } else { 0.0 };
-            for z in posicoes(l, dr.esp_h) {
-                let z = z + desl;
+            for z in posicoes_fila(i) {
                 if z > l - 0.05 {
                     continue;
                 }

@@ -220,32 +220,49 @@ impl Misto {
         a * fyd * 1000.0 * z
     }
 
-    /// Cotas das vigas intermediárias (acima do topo da fundação), de cima para baixo:
-    /// em cada trecho, o maior vão (múltiplo de uma fiada, 0,20 m, até 1,60 m) que o
-    /// painel resiste com barras verticais Ø12,5 c/20 cm grauteadas.
+    /// Cotas das vigas intermediárias (acima do topo da fundação), de cima para baixo,
+    /// com FAIXAS DE INFLUÊNCIA IGUAIS: o diagrama de pressões é dividido em n + 1 faixas
+    /// de mesma força e as vigas ficam nas divisas — cada viga recebe a mesma parcela do
+    /// empuxo (com pressão triangular e 1 viga, ela fica a ≈ 0,29·H da base, perto de H/3).
+    /// n é o menor número em que todos os vãos do painel (≤ 1,60 m) resistem com barras
+    /// verticais Ø12,5 c/20 cm grauteadas.
     pub fn niveis_vigas(&self, pressao: &dyn Fn(f64) -> f64, h_painel: f64, gf: f64, fyd: f64) -> Vec<f64> {
         let d = self.bloco / 2.0;
         let cap = self.mrd_painel(area(12.5) / 0.20, d, fyd);
         let fvd = (0.35 + 17.5 * (area(12.5) / 0.20 * 1e-4 / d).min(0.02)).min(0.7) / GAMMA_M;
-        let mut v = Vec::new();
-        let mut topo = h_painel;
-        while topo > 0.0 && v.len() < 30 {
-            let mut a = 0.40;
-            for k in (2..=8).rev() {
-                let vao = 0.20 * k as f64;
-                let p = pressao((topo - vao).max(0.0));
-                if gf * p * vao * vao / 8.0 <= cap && gf * p * vao / 2.0 / d / 1000.0 <= fvd {
-                    a = vao;
-                    break;
-                }
-            }
-            topo -= a;
-            if topo <= 0.30 {
-                break; // o trecho final apoia-se na fundação
-            }
-            v.push(topo);
+        // força acumulada de cima para baixo: F(y) = ∫ de y a Hp de p
+        let passos = 400;
+        let dy = h_painel / passos as f64;
+        let mut acum = vec![0.0; passos + 1]; // acum[k]: força acima da cota h_painel − k·dy
+        for k in 1..=passos {
+            let y = h_painel - (k as f64 - 0.5) * dy;
+            acum[k] = acum[k - 1] + pressao(y.max(0.0)) * dy;
         }
-        v
+        let total = acum[passos];
+        let cota_para = |f: f64| -> f64 {
+            let k = acum.iter().position(|&a| a >= f).unwrap_or(passos);
+            let (a0, a1) = (acum[k.saturating_sub(1)], acum[k]);
+            let frac = if a1 > a0 { (f - a0) / (a1 - a0) } else { 0.0 };
+            h_painel - ((k as f64 - 1.0).max(0.0) + frac) * dy
+        };
+        let atende = |cotas: &[f64]| -> bool {
+            let mut apoios = vec![h_painel];
+            apoios.extend_from_slice(cotas);
+            apoios.push(0.0);
+            apoios.windows(2).all(|w| {
+                let a = w[0] - w[1];
+                let p = pressao(w[1]);
+                a <= 1.60 + 1e-9 && gf * p * a * a / 8.0 <= cap && gf * p * a / 2.0 / d / 1000.0 <= fvd
+            })
+        };
+        for n in 0..=20usize {
+            // arredonda as cotas a 5 cm (modulação das formas/fiadas)
+            let cotas: Vec<f64> = (1..=n).map(|k| ((cota_para(total * k as f64 / (n + 1) as f64) / 0.05).round() * 0.05).clamp(0.20, h_painel - 0.20)).collect();
+            if atende(&cotas) || n == 20 {
+                return cotas;
+            }
+        }
+        Vec::new()
     }
 
     /// Dimensiona painel, vigas intermediárias e pilar. `m_k`, `v_k`: momento e cortante
@@ -281,10 +298,10 @@ impl Misto {
         apoios.push(h_painel);
         r.formula(
             "Distribuição das vigas intermediárias (pela carga)",
-            "de cima para baixo: em cada trecho, o maior vão a (fiadas de 0,20 m, até 1,60 m) com γf·p(base do trecho)·a²/8 ≤ MRd do painel",
+            "faixas de influência iguais: ∫ p dy dividido em n + 1 partes de mesma força, vigas nas divisas ; n mínimo com todos os vãos ≤ 1,60 m e γf·p·a²/8 ≤ MRd do painel",
             format!("altura do painel = {} m ; pressão na base = {} kPa ; no topo = {} kPa", fmt(h_painel), fmt(pressao(0.0)), fmt(pressao(h_painel))),
             format!(
-                "{} viga(s) intermediária(s) a {} m acima da fundação — mais próximas embaixo, onde está a maior parte do empuxo",
+                "{} viga(s) intermediária(s) a {} m acima da fundação — cada uma com a mesma parcela do empuxo (mais próximas embaixo)",
                 niveis.len(),
                 if niveis.is_empty() { "—".to_string() } else { niveis.iter().rev().map(|y| fmt(*y)).collect::<Vec<_>>().join(" ; ") }
             ),
@@ -660,5 +677,59 @@ mod testes {
             let m = o.melhor.clone().unwrap_or_else(|| panic!("{fund:?}: {}", o.mensagem(crate::otimizar::custo(&p))));
             assert!(m.projeto.calcular().atende());
         }
+    }
+}
+
+#[cfg(test)]
+mod testes_vigas_barbacas {
+    use super::{FundacaoMisto, Sistema};
+    use crate::projeto::{Projeto, TipoContencao};
+
+    #[test]
+    fn vigas_com_faixas_de_influencia_iguais() {
+        let p = Projeto::default();
+        let pr = |y: f64| 10.0 * (3.0 - y); // triangular, zero no topo
+        let n = p.flexao.misto.niveis_vigas(&pr, 3.0, 1.4, 435.0);
+        assert!(!n.is_empty());
+        // forças entre apoios consecutivos (topo, vigas, base) iguais a menos do arredondamento de 5 cm
+        let f = |a: f64, b: f64| 5.0 * ((3.0 - b).powi(2) - (3.0 - a).powi(2)); // ∫ de b a a
+        let mut apoios = vec![3.0];
+        apoios.extend(n.iter());
+        apoios.push(0.0);
+        let faixas: Vec<f64> = apoios.windows(2).map(|w| f(w[0], w[1])).collect();
+        let media = faixas.iter().sum::<f64>() / faixas.len() as f64;
+        for x in &faixas {
+            assert!((x - media).abs() < 0.15 * media, "{faixas:?}");
+        }
+        if n.len() == 1 {
+            assert!((n[0] - 0.29 * 3.0).abs() < 0.1, "1 viga perto de H/3: {}", n[0]);
+        }
+    }
+
+    #[test]
+    fn barbacas_so_nos_panos_de_alvenaria() {
+        let mut p = Projeto::default();
+        p.tipo = TipoContencao::Flexao;
+        p.geometria.h = 3.0;
+        p.pre_dimensionar();
+        p.flexao.sistema = Sistema::Misto;
+        p.flexao.misto.fundacao = FundacaoMisto::Estacas;
+        let r = p.calcular();
+        let m = crate::modelo3d::Modelo3d::montar(&p, &r, 9.0, false);
+        let pilares: Vec<(f64, f64)> = m.pecas.iter().filter(|x| x.classe == crate::modelo3d::Classe::Pilar).filter_map(|x| match &x.forma {
+            crate::modelo3d::Forma::Extrusao { z0, z1, .. } => Some((*z0, *z1)),
+            _ => None,
+        }).collect();
+        let vigas = p.niveis_vigas_misto();
+        let vh = p.flexao.misto.viga_h;
+        let mut n = 0;
+        for pc in m.pecas.iter().filter(|x| x.nome.starts_with("Barbacã")) {
+            if let crate::modelo3d::Forma::Barra { p0, .. } = pc.forma {
+                n += 1;
+                assert!(pilares.iter().all(|(a, b)| p0[2] < a - 0.05 || p0[2] > b + 0.05), "barbacã no pilar em z = {}", p0[2]);
+                assert!(vigas.iter().all(|y| (p0[1] - y).abs() > vh / 2.0), "barbacã na viga em y = {}", p0[1]);
+            }
+        }
+        assert!(n > 0);
     }
 }

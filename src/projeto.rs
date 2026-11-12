@@ -792,6 +792,18 @@ impl Projeto {
 
     /// Geometria da drenagem na seção (mesmas coordenadas do desenho e do
     /// modelo de estabilidade global): barbacãs, filtro, dreno de pé, canaletas e DHP.
+    /// Cotas absolutas (na seção) das vigas intermediárias do muro misto — as mesmas do cálculo.
+    pub fn niveis_vigas_misto(&self) -> Vec<f64> {
+        let fx = self.preparar_flexao();
+        if self.tipo != TipoContencao::Flexao || fx.sistema != crate::tipos::misto::Sistema::Misto {
+            return Vec::new();
+        }
+        let hst = fx.h - fx.h_sapata;
+        let ph = |z: f64| fx.empuxo.pressao_horizontal_total(&fx.aterro, &fx.cargas, 0.0, z);
+        let p_y = |y: f64| ph((hst - y).max(0.0));
+        fx.misto.niveis_vigas(&p_y, hst - crate::tipos::misto::H_RESPALDO, self.fatores.gamma_f, fx.concreto.fyk / 1.15).into_iter().map(|y| fx.h_sapata + y).collect()
+    }
+
     pub fn geo_drenagem(&self) -> GeoDrenagem {
         let dr = &self.drenagem;
         let mut gd = GeoDrenagem::default();
@@ -832,11 +844,20 @@ impl Projeto {
             TipoContencao::Flexao => {
                 let m = self.preparar_flexao();
                 let (bp, tbs, tt, hs, h) = (m.b_ponta, m.t_base, m.t_topo, m.h_sapata, m.h);
-                let xr = |y: f64| bp + tbs - (tbs - tt) * ((y - hs) / (h - hs)).clamp(0.0, 1.0);
+                let misto = m.sistema == crate::tipos::misto::Sistema::Misto;
+                // misto: o barbacã atravessa só o pano de alvenaria (espessura do bloco)
+                let xr = |y: f64| if misto { bp + m.misto.bloco } else { bp + tbs - (tbs - tt) * ((y - hs) / (h - hs)).clamp(0.0, 1.0) };
+                // misto: fora das vigas intermediárias e da viga de respaldo (folga de 5 cm)
+                let vigas = if misto { self.niveis_vigas_misto() } else { Vec::new() };
+                let folga = 0.5 * m.misto.viga_h + 0.05 + dr.diam_barbaca_mm / 2000.0;
+                let livre = |y: f64| !misto || (vigas.iter().all(|yv| (y - yv).abs() > folga) && y < h - crate::tipos::misto::H_RESPALDO - 0.05);
                 let y0 = m.df.max(hs);
                 for v in dr.filas(h - y0) {
+                    // fila que cai numa viga: desloca para o pano mais próximo (acima ou abaixo)
                     let y = y0 + v;
-                    barb(&mut gd, xr(y), bp, y);
+                    if let Some(y) = [y, y + 2.0 * folga, y - 2.0 * folga].into_iter().find(|&y| y > y0 + 0.05 && livre(y)) {
+                        barb(&mut gd, xr(y), bp, y);
+                    }
                 }
                 let yt = h - 0.3;
                 gd.filtro = Some(([bp + tbs, hs], [xr(yt), yt]));
