@@ -858,18 +858,19 @@ fn armaduras_vigas(d: &DimMisto, mi: &Misto, c: &Concreto) -> Vec<Armadura> {
             lb_cm: lb(d.baldrame_phi),
             forma: Forma::Reta,
         });
-        let l_arm = e.comprimento.min(4.0).max(3.0);
+        // trecho armado e barras pela carga horizontal (Matlock-Reese), mín. 0,4 % Ac
+        let l_arm = e.l_armada;
         v.push(Armadura {
             pos: "N10".into(),
-            elemento: format!("Estaca escavada Ø{} cm — longitudinal (trecho armado)", fmt(100.0 * mi.diam_estaca)),
-            bitola_mm: 12.5,
+            elemento: format!("Estaca escavada Ø{} cm — longitudinal (trecho armado {} m)", fmt(100.0 * mi.diam_estaca), fmt(l_arm)),
+            bitola_mm: e.phi,
             espac_cm: None,
-            quantidade: "5 por estaca".into(),
-            comprimento_m: l_arm + lb(12.5) / 100.0,
-            as_nec: 5.0 * area(12.5),
-            as_ef: 5.0 * area(12.5),
+            quantidade: format!("{} por estaca", e.n_barras),
+            comprimento_m: l_arm + lb(e.phi) / 100.0,
+            as_nec: e.n_barras as f64 * area(e.phi),
+            as_ef: e.n_barras as f64 * area(e.phi),
             unidade: "cm²",
-            lb_cm: lb(12.5),
+            lb_cm: lb(e.phi),
             forma: Forma::Reta,
         });
         let [lbl, _, _] = e.bloco;
@@ -1013,21 +1014,21 @@ fn detalhes_nbr_misto(r: &mut Resultado, d: &DimMisto, mi: &Misto, c: &Concreto,
         let mut e = e;
         e.quantidade = format!("{}/m", (100.0 / e.espac_cm.unwrap_or(15.0)).ceil());
         v.push(e);
-        // estaca: hélice Ø5 c/20 no trecho armado (NBR 6122 Tab. 4 / NBR 6118 18.4.3)
+        // estaca: hélice dimensionada pelo cortante da carga horizontal, no trecho armado
         let dm = mi.diam_estaca - 2.0 * cob;
-        let l_arm = est.comprimento.min(4.0).max(3.0);
+        let l_arm = est.l_armada;
         v.push(Armadura {
             pos: "N14".into(),
             elemento: "Estaca — hélice (estribo contínuo)".into(),
-            bitola_mm: 6.3,
-            espac_cm: Some(20.0),
-            quantidade: format!("{} espiras", (l_arm / 0.20).ceil()),
-            comprimento_m: (l_arm / 0.20).ceil() * std::f64::consts::PI * dm,
+            bitola_mm: est.phi_helice,
+            espac_cm: Some(est.s_helice),
+            quantidade: format!("{} espiras", (l_arm / (est.s_helice / 100.0)).ceil()),
+            comprimento_m: (l_arm / (est.s_helice / 100.0)).ceil() * std::f64::consts::PI * dm,
             as_nec: 0.0,
-            as_ef: armadura::area_barra_cm2(6.3) * 5.0,
+            as_ef: armadura::area_barra_cm2(est.phi_helice) * 100.0 / est.s_helice,
             unidade: "cm²/m",
             lb_cm: 0.0,
-            forma: Forma::Helice { d: dm, passo: 0.20 },
+            forma: Forma::Helice { d: dm, passo: est.s_helice / 100.0 },
         });
         // bloco: tirante concentrado sobre as estacas, numa faixa de até 1,2·Ø (NBR 6118 22.7.4.1.1)
         let (n, phi) = super::misto::barras(est.as_bloco, 1.2 * mi.diam_estaca + 2.0 * cob + 0.016, cob);

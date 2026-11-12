@@ -103,7 +103,7 @@ pub fn gerar(p: &Projeto, r: &Resultado, l: f64) -> Vec<Peca> {
     g.pecas
 }
 
-fn flexao(p: &Projeto, r: &Resultado, l: f64, g: &mut Gerador) {
+fn flexao(p: &Projeto, _r: &Resultado, l: f64, g: &mut Gerador) {
     let m = p.preparar_flexao();
     let c = m.concreto.cobrimento;
     let (bp, tb, tt, hs, h) = (m.b_ponta, m.t_base, m.t_topo, m.h_sapata, m.h);
@@ -174,7 +174,6 @@ fn flexao(p: &Projeto, r: &Resultado, l: f64, g: &mut Gerador) {
     let mi = &m.misto;
     let est = mi.fundacao_estacas();
     let (e_est, lb_bl, bb_bl, hb_bl) = mi.geometria_bloco();
-    let l_est = r.verificacoes.iter().find(|v| v.nome.starts_with("Estaca: comprimento")).map(|v| v.valor).unwrap_or(6.0);
     let pilares = crate::modelo3d::posicoes_pub(l, mi.espac_pilar);
     let y_base_pilar = if est { hs - hb_bl + c + 0.05 } else { c + 0.05 };
     // pilares: N1 na face do aterro, 2 porta-estribos na face externa, estribos N3
@@ -303,7 +302,7 @@ fn flexao(p: &Projeto, r: &Resultado, l: f64, g: &mut Gerador) {
     if let Some(n10) = g.pos("N10") {
         let f = n10.bitola_mm / 1000.0;
         let n = qtd(n10);
-        let l_arm = l_est.min(4.0).max(3.0);
+        let l_arm = (n10.comprimento_m - n10.lb_cm / 100.0).max(1.0);
         let rr = mi.diam_estaca / 2.0 - c - 0.0063 - f / 2.0;
         let mut t = Vec::new();
         let mut th = Vec::new();
@@ -362,21 +361,55 @@ fn estacas_parede(p: &Projeto, r: &Resultado, l: f64, g: &mut Gerador) {
         let n = qtd(n1);
         let f = n1.bitola_mm / 1000.0;
         let rr = e.diametro / 2.0 - c - 0.0063 - f / 2.0;
-        let mut t = Vec::new();
-        let mut th = Vec::new();
+        // barras adicionais do corte (N1b): trecho "de z = a a b m" (z a partir do topo)
+        let adicional = g.pos("N1b").map(|a| {
+            let nums: Vec<f64> = a
+                .elemento
+                .split(|ch: char| !(ch.is_ascii_digit() || ch == ','))
+                .filter(|t| !t.is_empty())
+                .filter_map(|t| t.replace(',', ".").parse().ok())
+                .collect();
+            (a, qtd(a), nums.first().copied().unwrap_or(0.0), nums.get(1).copied().unwrap_or(lt))
+        });
+        let (mut t, mut tb, mut th) = (Vec::new(), Vec::new(), Vec::new());
         for zc in crate::modelo3d::posicoes_pub(l, e.espacamento) {
             for k in 0..n {
                 let a = std::f64::consts::TAU * k as f64 / n as f64;
                 tubo(&[[rr * a.cos(), -lt + c, zc + rr * a.sin()], [rr * a.cos(), -c, zc + rr * a.sin()]], n1.bitola_mm, &mut t);
+            }
+            if let Some((_, nb, z1, z2)) = adicional {
+                for k in 0..nb {
+                    // entre as contínuas, na face mais tracionada (lado do aterro, +x)
+                    let a = std::f64::consts::TAU * (k as f64 + 0.5) / n as f64 - std::f64::consts::PI * (nb as f64 - 1.0) / n as f64;
+                    tubo(&[[rr * a.cos(), -z2, zc + rr * a.sin()], [rr * a.cos(), -z1, zc + rr * a.sin()]], n1.bitola_mm, &mut tb);
+                }
             }
             if let Some(n2) = g.pos("N2") {
                 aros(0.0, zc, rr + f / 2.0 + 0.003, -lt + c, -c, n2.espac_cm.unwrap_or(15.0) / 100.0, n2.bitola_mm, &mut th);
             }
         }
         g.add(n1, t);
+        if let Some((a, ..)) = adicional {
+            g.add(a, tb);
+        }
         if let Some(n2) = g.pos("N2") {
             g.add(n2, th);
         }
+    }
+    // tela do fechamento entre estacas, no meio da espessura do concreto projetado
+    if let (Some(n5), Some((esp, ..))) = (g.pos("N5"), e.dimensionar_fechamento(p.fatores.gamma_f, p.fatores.gamma_c, p.fatores.gamma_s)) {
+        let x = -e.diametro / 2.0 - esp / 2.0;
+        let s = n5.espac_cm.map(|s| s / 100.0).unwrap_or(if n5.as_ef < 1.13 { 0.15 } else { 0.10 });
+        let phi = if n5.bitola_mm > 0.0 { n5.bitola_mm } else { (n5.as_ef * s * 4.0 / std::f64::consts::PI).sqrt() * 10.0 };
+        let (y0, y1) = (-p.geometria.h + 0.03, -e.viga_h - 0.03);
+        let mut t = Vec::new();
+        for y in ao_longo(y0, y1, s) {
+            tubo(&[[x, y, 0.03], [x, y, l - 0.03]], phi, &mut t);
+        }
+        for z in ao_longo(0.03, l - 0.03, s) {
+            tubo(&[[x, y0, z], [x, y1, z]], phi, &mut t);
+        }
+        g.add(n5, t);
     }
 }
 

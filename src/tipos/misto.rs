@@ -152,6 +152,13 @@ pub struct EstacaDim {
     pub bloco: [f64; 3],
     /// Armadura principal do bloco (tirante), cm².
     pub as_bloco: f64,
+    /// Estaca: barras longitudinais (n, Ø mm) e comprimento armado (m) pela carga horizontal.
+    pub n_barras: usize,
+    pub phi: f64,
+    pub l_armada: f64,
+    /// Hélice pelo cortante (Ø mm, passo cm).
+    pub phi_helice: f64,
+    pub s_helice: f64,
 }
 
 /// Resultado do dimensionamento do sistema misto (para o detalhamento e o desenho).
@@ -565,10 +572,88 @@ impl Misto {
         }
         r.verif(Verificacao::max("Estaca: tensão média no fuste ≤ 5 MPa (NBR 6122, escavada)", n_comp / ap / 1000.0, 5.0, "MPa"));
         r.verif(Verificacao::info("Estaca: carga horizontal (por estaca)", h_est, "kN"));
-        r.aviso(format!(
-            "Estacas: carga horizontal de {} kN por estaca — verificar o fuste à flexão por método de reação horizontal do solo (Miche, Matlock-Reese); o passivo do baldrame e dos blocos ajuda e não foi considerado.",
-            fmt(h_est)
-        ));
+        // ---- carga horizontal: estaca longa em meio elástico (Matlock-Reese / Miche) ----
+        // kh = nh·z (solo com módulo de reação crescente com a profundidade) ; cabeça
+        // impedida de girar pelo bloco + baldrame: M_cabeça = 0,93·H·T ; y0 = 0,93·H·T³/EI
+        let ecs = 0.85 * 5600.0 * c.fck.sqrt() * 1000.0; // kPa (NBR 6118 8.2.8)
+        let inercia = PI * d.powi(4) / 64.0;
+        let ei = ecs * inercia;
+        // nh pelo solo nos 3 m abaixo do bloco (Terzaghi para areias; estimativa para argilas/siltes)
+        let (n_med, t_solo) = {
+            let pts: Vec<(f64, TipoSolo)> = (0..6).map(|k| n_em(z0 + 0.25 + 0.5 * k as f64)).collect();
+            (pts.iter().map(|p| p.0).sum::<f64>() / pts.len() as f64, pts[0].1)
+        };
+        let areia = format!("{t_solo:?}").starts_with("Areia");
+        let nh = 1000.0
+            * if areia {
+                if n_med < 10.0 { 2.2 } else if n_med < 30.0 { 6.6 } else { 17.6 }
+            } else if n_med < 4.0 {
+                0.35
+            } else if n_med < 8.0 {
+                0.7
+            } else if n_med < 15.0 {
+                1.5
+            } else {
+                3.0
+            }; // kN/m³
+        let t_rel = (ei / nh).powf(0.2);
+        let m_cab = 0.93 * h_est * t_rel;
+        let y0 = 0.93 * h_est * t_rel.powi(3) / ei * 1000.0; // mm
+        let c_eixo = cob + 0.0063 + 0.008;
+        let ac = ap * 1e4;
+        let as_min_est = 0.004 * ac; // pilar/estaca fletida: 0,4 % Ac (NBR 6118 17.3.5.3.1)
+        let as_flex = crate::concreto::as_circular(gf * m_cab, d, c_eixo, 6, c.fck, c.fyk, fat.gamma_c, fat.gamma_s);
+        let as_est = as_flex.unwrap_or(0.04 * ac).max(as_min_est);
+        let (mut n_est, mut phi_est) = (6usize, 12.5);
+        'esc: for phi in [10.0, 12.5, 16.0, 20.0, 25.0] {
+            for n in 6..=12usize {
+                if n as f64 * area(phi) >= as_est {
+                    let r_s = d / 2.0 - c_eixo;
+                    let livre = 2.0 * PI * r_s * 1000.0 / n as f64 - phi;
+                    if livre >= crate::armadura::livre_minimo_mm(phi) && phi <= d * 1000.0 / 8.0 {
+                        n_est = n;
+                        phi_est = phi;
+                        break 'esc;
+                    }
+                }
+            }
+        }
+        // comprimento armado: até onde o momento se anula na prática (≈ 4·T), mín. 3 m
+        let l_arm = crate::projeto::arred((4.0 * t_rel).max(3.0)).min(l);
+        let vrd = crate::concreto::vrd1(0.9 * d, 0.75 * d, n_est as f64 * area(phi_est) / 2.0, c.fck, fat.gamma_c);
+        r.formula(
+            "Estaca sob carga horizontal — Matlock-Reese (kh = nh·z), cabeça engastada no bloco",
+            "T = (EI/nh)^(1/5) ;  M = 0,93·H·T ;  y0 = 0,93·H·T³/EI ;  Md = γf·M → As (seção circular) ;  L armado ≥ 4·T",
+            format!(
+                "H = {} kN ;  Ecs = {} MPa ;  I = {} m⁴ ;  nh = {} MN/m³ ({}, N médio {})",
+                fmt(h_est), fmt(ecs / 1000.0), format!("{:.5}", inercia).replace('.', ","), fmt(nh / 1000.0),
+                if areia { "areia, Terzaghi" } else { "argila/silte, estimativa" }, fmt(n_med)
+            ),
+            format!(
+                "T = {} m ;  M = {} kN·m ;  y0 = {} mm ;  As = {} cm² → {} Ø{} ;  L armado = {} m",
+                fmt(t_rel), fmt(m_cab), fmt(y0), fmt(as_est), n_est, crate::armadura::fmt_bitola(phi_est), fmt(l_arm)
+            ),
+        );
+        r.verif(Verificacao::min("Estaca: As (flexão por carga horizontal) ≤ As efetiva", n_est as f64 * area(phi_est), as_est, "cm²"));
+        // cortante: hélice dimensionada (modelo I, NBR 6118 17.4.2.2) com bw = 0,9·D e d = 0,75·D
+        let (bw_e, d_e) = (0.9 * d, 0.75 * d);
+        let fcd_e = c.fck / fat.gamma_c;
+        let vrd2_e = 0.27 * (1.0 - c.fck / 250.0) * fcd_e * bw_e * d_e * 1000.0;
+        let vc_e = vrd.min(0.6 * 0.21 * c.fck.powf(2.0 / 3.0) / fat.gamma_c * bw_e * d_e * 1000.0);
+        let asw_s_e = ((gf * h_est - vc_e).max(0.0) / (0.9 * d_e * (c.fyk / fat.gamma_s).min(435.0) * 1000.0) * 1e4).max(0.2 * 0.3 * c.fck.powf(2.0 / 3.0) / c.fyk * bw_e * 1e4);
+        let phi_h = if asw_s_e > 5.0 { 8.0 } else { 6.3 };
+        let s_h = ((2.0 * area(phi_h) / asw_s_e * 100.0).floor()).min(20.0).min(1.2 * phi_est).min(100.0 * d).max(5.0);
+        r.formula(
+            "Estaca — cortante da carga horizontal: hélice (modelo I, NBR 6118 17.4.2.2)",
+            "bw = 0,9·D ; d = 0,75·D ;  VRd2 = 0,27·αv2·fcd·bw·d ;  Asw/s = (Vd − Vc)/(0,9·d·fywd) ;  s ≤ mín(20 cm ; 12·Øl ; D)",
+            format!("Vd = {} kN ;  Vc = {} kN ;  VRd2 = {} kN", fmt(gf * h_est), fmt(vc_e), fmt(vrd2_e)),
+            format!("hélice Ø{} c/{} cm (2 ramos por seção)", crate::armadura::fmt_bitola(phi_h), fmt(s_h)),
+        );
+        r.verif(Verificacao::max("Estaca: Vd ≤ VRd2 (carga horizontal)", gf * h_est, vrd2_e, "kN"));
+        r.verif(Verificacao::info("Estaca: deslocamento horizontal do topo (Matlock-Reese)", y0, "mm"));
+        if as_flex.is_none() {
+            r.aviso("Estaca: seção insuficiente para o momento da carga horizontal mesmo com 4 % de armadura — aumentar o diâmetro.");
+        }
         // bloco rígido sobre 2 estacas — método das bielas (Blévot)
         let db_b = h_bloco - 0.06;
         let rs = n_comp.max(0.0) * gf * (e / 2.0 - self.pilar_h / 4.0) / db_b;
@@ -579,7 +664,7 @@ impl Misto {
             format!("Nest = {} kN ;  e = {} m ;  ap = {} m ;  d = {} m", fmt(n_comp), fmt(e), fmt(self.pilar_h), fmt(db_b)),
             format!("Rs = {} kN ;  As = {} cm²", fmt(rs), fmt(as_bloco)),
         );
-        dm.estacas = Some(EstacaDim { comprimento: l, n_comp, n_trac, h: h_est, q_adm, qt_adm, e, bloco: [l_bloco, b_bloco, h_bloco], as_bloco });
+        dm.estacas = Some(EstacaDim { comprimento: l, n_comp, n_trac, h: h_est, q_adm, qt_adm, e, bloco: [l_bloco, b_bloco, h_bloco], as_bloco, n_barras: n_est, phi: phi_est, l_armada: l_arm, phi_helice: phi_h, s_helice: s_h });
     }
 
     /// Vista superior (planta) de 2 vãos: pilares, painel, vigas, blocos, estacas e cotas.

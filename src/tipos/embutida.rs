@@ -666,11 +666,10 @@ impl ParedeEstacas {
                 }
             }
             r.aviso("Cortante na estaca: verificar a hélice para a força cortante conforme NBR 6118 (aqui detalhada pelas disposições construtivas de 18.4.3).");
-            self.detalhamento(&mut r, s, as_long);
+            self.detalhamento(&mut r, s, as_long, fat);
         }
-        if self.espacamento > 3.0 * self.diametro {
-            r.aviso("Espaçamento > 3D: verificar efeito de arco do solo entre estacas e necessidade de parede entre estacas.");
-        }
+        // estanqueidade da cortina: estacas tangentes/secantes ou fechamento armado entre estacas
+        self.estanqueidade(&mut r, fat);
         r.aviso("Empuxo passivo calculado como parede contínua; para estacas espaçadas a largura efetiva do passivo é limitada (≈ 3D).");
         r.aviso("Ruptura de fundo da escavação ainda não implementada (a estabilidade global circular é verificada à parte).");
         r.desenho = self.parede.desenho(s.as_ref(), self.diametro, Estilo::Concreto);
@@ -694,7 +693,7 @@ impl ParedeEstacas {
     }
 
     /// Detalhamento: estaca (longitudinal + hélice), espaçamento, ficha e viga de travamento.
-    fn detalhamento(&self, r: &mut Resultado, s: &Solucao, as_long: Option<f64>) {
+    fn detalhamento(&self, r: &mut Resultado, s: &Solucao, as_long: Option<f64>, fat: &Fatores) {
         let c = &self.concreto;
         let (dm, cob) = (self.diametro, c.cobrimento);
         let h = self.parede.h;
@@ -744,12 +743,20 @@ impl ParedeEstacas {
             );
             r.verif(Verificacao::max("Estaca: espaçamento entre eixos das barras ≤ 400 mm (NBR 6118 18.4.2.2)", eixo_mm, 400.0, "mm"));
             r.verif(Verificacao::min("Estaca: espaçamento livre entre barras ≥ 20 mm (NBR 6118 18.4.2.2)", livre_mm, 20.0_f64.max(phi), "mm"));
+            // corte de barras pelo diagrama de momentos (NBR 6118 18.3.2.3): n_c barras
+            // contínuas (mín. 6 e As,mín = 0,4 % Ac) e as demais só onde Md > MRd(n_c),
+            // prolongadas da decalagem aℓ ≈ d e da ancoragem lb,nec
+            let ac = std::f64::consts::PI * dm * dm / 4.0 * 1e4;
+            let n_c = (((0.004 * ac) / ab).ceil() as usize).max(6).min(n);
+            let c_eixo = cob + 0.01 + phi / 2000.0;
+            let mrd_c = crate::concreto::mrd_circular(dm, c_eixo, n_c as f64 * ab, n_c, c.fck, c.fyk, fat.gamma_c, fat.gamma_s);
+            let excede: Vec<f64> = s.momentos.iter().filter(|(_, m)| fat.gamma_f * m.abs() * self.espacamento > mrd_c).map(|(z, _)| *z).collect();
             tab.push(Armadura {
                 pos: "N1".into(),
-                elemento: "Estaca — longitudinal".into(),
+                elemento: if n_c < n { "Estaca — longitudinal contínua".into() } else { "Estaca — longitudinal".into() },
                 bitola_mm: phi,
                 espac_cm: None,
-                quantidade: format!("{n} por estaca"),
+                quantidade: format!("{} por estaca", if n_c < n && !excede.is_empty() { n_c } else { n }),
                 comprimento_m: l_total - cob + lb / 100.0,
                 as_nec: as_l,
                 as_ef: n as f64 * ab,
@@ -757,6 +764,31 @@ impl ParedeEstacas {
                 lb_cm: lb,
                 forma: Forma::Reta,
             });
+            if n_c < n && !excede.is_empty() {
+                let al = 0.8 * dm; // decalagem do diagrama ≈ d útil
+                let (za, zb) = (excede[0], *excede.last().unwrap());
+                let z1 = (za - al - lb / 100.0).max(0.0);
+                let z2 = (zb + al + lb / 100.0).min(l_total - cob);
+                r.formula(
+                    "Corte das barras da estaca pelo diagrama de momentos (NBR 6118 18.3.2.3)",
+                    "barras contínuas n_c = máx(6 ; As,mín/A) ;  adicionais onde γf·M(z)·s > MRd(n_c), prolongadas de aℓ + lb,nec",
+                    format!("MRd({} Ø{}) = {} kN·m ;  Md > MRd entre z = {} e {} m ;  aℓ = {} m ;  lb = {} cm", n_c, armadura::fmt_bitola(phi), fmt(mrd_c), fmt(za), fmt(zb), fmt(al), fmt(lb)),
+                    format!("{} Ø{} contínuas + {} Ø{} de z = {} a {} m ({} m)", n_c, armadura::fmt_bitola(phi), n - n_c, armadura::fmt_bitola(phi), fmt(z1), fmt(z2), fmt(z2 - z1)),
+                );
+                tab.push(Armadura {
+                    pos: "N1b".into(),
+                    elemento: format!("Estaca — longitudinal adicional (de z = {} a {} m)", fmt(z1), fmt(z2)),
+                    bitola_mm: phi,
+                    espac_cm: None,
+                    quantidade: format!("{} por estaca", n - n_c),
+                    comprimento_m: z2 - z1,
+                    as_nec: 0.0,
+                    as_ef: (n - n_c) as f64 * ab,
+                    unidade: "cm²",
+                    lb_cm: lb,
+                    forma: Forma::Reta,
+                });
+            }
             let espiras = l_total / (passo_cm / 100.0);
             tab.push(Armadura {
                 pos: "N2".into(),
@@ -827,6 +859,86 @@ impl ParedeEstacas {
         }
     }
 
+}
+
+
+impl ParedeEstacas {
+    /// Vão livre entre estacas vizinhas (m); ≤ 0 em estacas secantes.
+    pub fn vao_livre(&self) -> f64 {
+        self.espacamento - self.diametro
+    }
+
+    /// Fechamento em concreto projetado armado entre estacas (quando há vão): placa
+    /// biapoiada nas estacas sob a pressão do solo no pé da escavação.
+    /// Retorna (espessura, As cm²/m, Md kN·m/m, p kPa, vão de cálculo m).
+    pub fn dimensionar_fechamento(&self, gf: f64, gc: f64, gs: f64) -> Option<(f64, f64, f64, f64, f64)> {
+        let vao = self.vao_livre();
+        if vao <= 0.02 {
+            return None;
+        }
+        let pa = &self.parede;
+        let p = pa.empuxo.pressao_horizontal_total(&pa.perfil, &pa.cargas, 0.0, pa.h);
+        let l = vao + 0.10; // apoio de 5 cm em cada estaca
+        let md = gf * p * l * l / 8.0;
+        let c = &self.concreto;
+        for e in [0.07, 0.08, 0.10, 0.12, 0.15, 0.20] {
+            let fl = crate::concreto::flexao_retangular(md, 1.0, e, e / 2.0, c.fck, c.fyk, gc, gs);
+            if fl.viavel {
+                return Some((e, fl.as_adotar(), md, p, l));
+            }
+        }
+        Some((0.20, f64::INFINITY, md, p, l))
+    }
+
+    /// Estanqueidade da cortina contra a fuga de solo e de finos entre estacas.
+    fn estanqueidade(&self, r: &mut Resultado, fat: &Fatores) {
+        let vao = self.vao_livre();
+        r.titulo("Estanqueidade da cortina — continuidade contra a fuga de solo entre estacas");
+        if vao <= 0.02 {
+            r.linha(format!(
+                "Estacas {} (vão livre {} m): cortina contínua ; tratar as juntas na face escavada (argamassa/concreto projetado) onde houver água ou solo arenoso.",
+                if vao < -1e-6 { "secantes" } else { "tangentes" },
+                fmt(vao.max(0.0))
+            ));
+            r.verif(Verificacao::max("Cortina: vão livre entre estacas (contínua)", vao.max(0.0), 0.02, "m"));
+            return;
+        }
+        // vão aberto: fechamento armado obrigatório e vão limitado ao diâmetro (efeito de arco)
+        r.verif(Verificacao::max("Cortina: vão livre entre estacas ≤ Ø (efeito de arco do solo, fechamento armado)", vao, self.diametro, "m"));
+        let Some((e, as_nec, md, p, l)) = self.dimensionar_fechamento(fat.gamma_f, fat.gamma_c, fat.gamma_s) else { return };
+        r.formula(
+            "Fechamento entre estacas — concreto projetado armado (placa biapoiada nas estacas)",
+            "L = vão livre + 2·5 cm ;  Md = γf·p·L²/8 (p no pé da escavação) ;  As pela flexão (d = e/2, tela no meio da espessura)",
+            format!("vão livre = {} m ;  L = {} m ;  p = {} kPa ;  e = {} cm", fmt(vao), fmt(l), fmt(p), fmt(100.0 * e)),
+            format!("Md = {} kN·m/m ;  As = {} cm²/m (cada direção)", fmt(md), fmt(as_nec)),
+        );
+        r.verif(Verificacao::max("Fechamento entre estacas: espessura ≤ 20 cm", e, 0.20, "m"));
+        let (nome, as_ef, phi, s) = match armadura::tela(as_nec) {
+            Some((n, a)) => (format!("tela soldada {n}"), a, 0.0, None),
+            None => {
+                let (phi, s, a) = armadura::malha_principal(as_nec, e);
+                (format!("malha Ø{} c/{}", armadura::fmt_bitola(phi), armadura::fmt_bitola(s)), a, phi, Some(s))
+            }
+        };
+        r.linha(format!(
+            "Fechamento em concreto projetado (fck ≥ 20 MPa) com {} entre e sobre as estacas na face escavada, e = {} cm, da cota da viga de coroamento ao pé da escavação ; ancorar a tela nas estacas com chumbadores a cada 50 cm e prever barbacãs no fechamento.",
+            nome,
+            fmt(100.0 * e)
+        ));
+        r.armaduras.push(Armadura {
+            pos: "N5".into(),
+            elemento: format!("Fechamento entre estacas — {nome} (duas direções)"),
+            bitola_mm: phi,
+            espac_cm: s,
+            quantidade: if phi > 0.0 { format!("{}/m", (100.0 / s.unwrap_or(15.0)).ceil()) } else { nome.clone() },
+            comprimento_m: 0.0,
+            as_nec,
+            as_ef,
+            unidade: "cm²/m",
+            lb_cm: 0.0,
+            forma: Forma::Tela,
+        });
+    }
 }
 
 #[cfg(test)]

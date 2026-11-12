@@ -1057,9 +1057,15 @@ impl Projeto {
                 let e = self.preparar_estacas();
                 let lt = verif(r, "Comprimento total").unwrap_or(0.0);
                 cx.estacas_por_m = 1.0 / e.espacamento.max(0.2);
-                cx.altura = lt;
+                // telas do fechamento cobrem a altura escavada
+                cx.altura = self.geometria.h;
                 q.push(("Estacas", format!("Ø{} cm a cada {} m, L = {} m", f0(100.0 * e.diametro), fmt(e.espacamento), fmt(lt)), lt / e.espacamento.max(0.2), "m/m"));
                 q.push(("Concreto", "estacas".into(), std::f64::consts::PI * e.diametro * e.diametro / 4.0 * lt / e.espacamento.max(0.2), "m³/m"));
+                let bv = (e.diametro + 0.20).max(0.40);
+                q.push(("Concreto", format!("viga de coroamento {}×{} m", fmt(bv), fmt(e.viga_h)), bv * e.viga_h, "m³/m"));
+                if let Some((esp, ..)) = e.dimensionar_fechamento(self.fatores.gamma_f, self.fatores.gamma_c, self.fatores.gamma_s) {
+                    q.push(("Concreto projetado", format!("fechamento entre estacas e = {} cm", f0(100.0 * esp)), esp * (self.geometria.h - e.viga_h).max(0.0), "m³/m"));
+                }
             }
             TipoContencao::Prancha => {
                 let e = self.preparar_prancha();

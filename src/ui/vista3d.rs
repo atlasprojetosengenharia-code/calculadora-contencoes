@@ -655,3 +655,26 @@ mod amostra_armaduras {
         }
     }
 }
+
+#[cfg(test)]
+mod amostra_cortina {
+    use super::*;
+    #[test]
+    #[ignore]
+    fn cortina() {
+        let Ok(pasta) = std::env::var("PASTA_3D") else { return };
+        let mut p = Projeto::default();
+        p.tipo = crate::projeto::TipoContencao::Estacas;
+        p.geometria.h = 5.0;
+        p.estacas.parede.apoio = crate::tipos::embutida::Apoio::Ancorada;
+        p.estacas.parede.prof_apoio = 1.5;
+        p.pre_dimensionar();
+        let r = p.calcular();
+        for (v, az, el, corte, arm) in [("frente", 1.2f32, 0.25f32, true, false), ("lado", 0.2, 0.15, true, false), ("arm", 1.0, 0.3, false, true)] {
+            let cena = Cena::montar(1, Modelo3d::montar(&p, &r, 5.0, corte));
+            let img = cena.rasterizar(900, 600, &Camera { azimute: az, elevacao: el, zoom: 1.4, corte, armaduras: arm, ..Camera::default() }, Color32::from_rgb(236, 240, 245), 1.0);
+            let px: Vec<u8> = img.pixels.iter().flat_map(|c| [c.r(), c.g(), c.b()]).collect();
+            std::fs::write(format!("{pasta}/cortina_{v}.png"), crate::raster::Imagem { w: 900, h: 600, px }.png()).unwrap();
+        }
+    }
+}

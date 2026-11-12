@@ -257,6 +257,13 @@ fn avaliar(mut p: Projeto, descricao: String) -> Alternativa {
     let pend = pendentes(&p);
     let descricao = match p.tipo {
         TipoContencao::Prancha => format!("{descricao} ; perfil {}", p.prancha.nome_perfil),
+        // misto: valores finais depois do ajuste estrutural (pilar e estacas)
+        TipoContencao::Flexao if p.flexao.sistema == crate::tipos::misto::Sistema::Misto => {
+            let mi = &p.flexao.misto;
+            let base = descricao.split(" ; estacas").next().unwrap_or(&descricao).to_string();
+            let est = if mi.fundacao_estacas() { format!(" ; estacas Ø{:.0} cm", 100.0 * mi.diam_estaca) } else { String::new() };
+            format!("{base}{est} ; pilares {:.0}×{:.0} cm", 100.0 * mi.pilar_b, 100.0 * mi.pilar_h)
+        }
         _ => descricao,
     };
     Alternativa { custo: custo(&p), atende: pend.is_empty(), pendentes: pend, descricao, projeto: p }

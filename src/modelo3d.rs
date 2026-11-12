@@ -542,6 +542,13 @@ impl Modelo3d {
                     material: mat,
                     forma: Forma::Vertical { planta: perfil_prancha(forma, b, hp, t.max(0.004), l, 0.0), y0: -lt, y1: 0.0 },
                 });
+                // viga de coroamento sobre a cortina de pranchas
+                md.pecas.push(Peca {
+                    nome: format!("Viga de coroamento 0,40 × {} m", crate::resultado::fmt(e.viga_h)),
+                    classe: Classe::Viga,
+                    material: Material::Concreto,
+                    forma: Forma::Extrusao { secao: vec![[-0.20 - hp / 2.0, -e.viga_h], [0.20 + hp / 2.0, -e.viga_h], [0.20 + hp / 2.0, 0.0], [-0.20 - hp / 2.0, 0.0]], z0: 0.0, z1: l },
+                });
                 md.apoios_embutida(&e.parede, h, lt, l, -hp / 2.0, e.viga_h);
             }
             TipoContencao::Estacas => {
@@ -557,7 +564,27 @@ impl Modelo3d {
                         forma: Forma::Vertical { planta: circulo(0.0, z, e.diametro, 20), y0: -lt, y1: 0.0 },
                     });
                 }
-                md.apoios_embutida(&e.parede, h, lt, l, -e.diametro / 2.0, 0.5);
+                // fechamento em concreto projetado armado entre estacas (cortina contínua) e
+                // viga de coroamento sobre as cabeças das estacas
+                let mut x_face = -e.diametro / 2.0;
+                if let Some((esp, ..)) = e.dimensionar_fechamento(p.fatores.gamma_f, p.fatores.gamma_c, p.fatores.gamma_s) {
+                    x_face = -e.diametro / 2.0 - esp;
+                    amplia(x_face);
+                    md.pecas.push(Peca {
+                        nome: format!("Fechamento entre estacas — concreto projetado armado e = {} cm", fmt0(100.0 * esp)),
+                        classe: Classe::Muro,
+                        material: Material::Concreto,
+                        forma: Forma::Extrusao { secao: vec![[x_face, -h], [-e.diametro / 2.0 + 0.05, -h], [-e.diametro / 2.0 + 0.05, -e.viga_h], [x_face, -e.viga_h]], z0: 0.0, z1: l },
+                    });
+                }
+                let bv = (e.diametro + 0.20).max(0.40);
+                md.pecas.push(Peca {
+                    nome: format!("Viga de coroamento {} × {} m", crate::resultado::fmt(bv), crate::resultado::fmt(e.viga_h)),
+                    classe: Classe::Viga,
+                    material: Material::Concreto,
+                    forma: Forma::Extrusao { secao: vec![[-bv / 2.0, -e.viga_h], [bv / 2.0, -e.viga_h], [bv / 2.0, 0.0], [-bv / 2.0, 0.0]], z0: 0.0, z1: l },
+                });
+                md.apoios_embutida(&e.parede, h, lt, l, x_face, 0.5);
             }
             TipoContencao::Grampeado => {
                 let g = p.preparar_grampeado();
@@ -835,7 +862,8 @@ impl Modelo3d {
             nome: "Viga de travamento (longarina)".into(),
             classe: Classe::Viga,
             material: Material::Concreto,
-            forma: Forma::Extrusao { secao: vec![[xv, y0 - vh / 2.0], [x_face, y0 - vh / 2.0], [x_face, y0 + vh / 2.0], [xv, y0 + vh / 2.0]], z0: 0.0, z1: l },
+            // embutida 3 cm na face da cortina (apoio físico contínuo: sem viga "flutuando")
+            forma: Forma::Extrusao { secao: vec![[xv, y0 - vh / 2.0], [x_face + 0.03, y0 - vh / 2.0], [x_face + 0.03, y0 + vh / 2.0], [xv, y0 + vh / 2.0]], z0: 0.0, z1: l },
         });
         for z in posicoes(l, par.espac_apoio) {
             let q = |s: f64| pt(dir[0] * s, y0 + dir[1] * s, z);
