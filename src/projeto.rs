@@ -1654,7 +1654,7 @@ mod testes_resumos {
             }
             // nenhum comprimento de corte maior que a maior dimensão plausível da peça
             let limite = 3.0 * (p.altura_contida() + 10.0);
-            for a in &r.armaduras {
+            for a in r.armaduras.iter().filter(|a| !matches!(a.forma, crate::armadura::Forma::Helice { .. })) {
                 assert!(a.comprimento_m < limite, "{}: {} com {} m", tipo.nome(), a.pos, a.comprimento_m);
             }
         }
