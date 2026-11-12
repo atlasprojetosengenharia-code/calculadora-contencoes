@@ -871,7 +871,7 @@ fn armaduras_vigas(d: &DimMisto, mi: &Misto, c: &Concreto) -> Vec<Armadura> {
             lb_cm: lb(12.5),
             forma: Forma::Reta,
         });
-        let [lbl, bbl, _] = e.bloco;
+        let [lbl, _, _] = e.bloco;
         // tirante concentrado na faixa de 1,2·Ø sobre a estaca (NBR 6118 22.7.4.1.1)
         let (n, phi) = super::misto::barras(e.as_bloco, 1.2 * mi.diam_estaca + 2.0 * cob + 0.016, cob);
         v.push(Armadura {
