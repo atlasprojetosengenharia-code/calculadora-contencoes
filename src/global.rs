@@ -390,7 +390,7 @@ impl Projeto {
         let beta = self.geometria.beta.to_radians().tan();
         let q = self.geometria.q;
         let na_nat = self.sondagem.na();
-        let na_ret = self.drenagem.na_efetivo(na_nat, self.altura_contida(), self.tipo);
+        let na_ret = self.na_calculo();
         let natural = self.sondagem.perfil(None);
         let mut m = Modelo {
             sup: vec![],

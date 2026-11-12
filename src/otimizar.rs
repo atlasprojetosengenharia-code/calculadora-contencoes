@@ -557,6 +557,8 @@ mod testes_muro_baixo {
     fn muro_de_gravidade_baixo_tem_solucao() {
         for h in [1.0, 1.5, 2.0] {
             let mut p = Projeto::default();
+            // dreno de pé ligado à rede (na base): sem lâmina residual
+            p.drenagem.pe_em_rede = true;
             p.tipo = TipoContencao::Gravidade;
             p.geometria.h = h;
             p.pre_dimensionar();

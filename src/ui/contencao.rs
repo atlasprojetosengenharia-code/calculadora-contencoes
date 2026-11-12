@@ -963,6 +963,9 @@ fn ui_drenagem(ui: &mut egui::Ui, d: &mut Drenagem, tipo: TipoContencao) {
         super::widgets::caixa(ui, &mut d.dreno_pe, "Dreno de pé (tubo perfurado) Ø");
         ui.add_enabled(d.dreno_pe, egui::DragValue::new(&mut d.diam_dreno_pe_mm).speed(1.0).range(50.0..=300.0).suffix(" mm"));
     });
+    if d.dreno_pe {
+        super::widgets::caixa(ui, &mut d.pe_em_rede, "Dreno de pé ligado a caixa/rede coletora abaixo do terreno");
+    }
     super::widgets::caixa(ui, &mut d.canaleta_crista, "Canaleta de crista");
     if matches!(tipo, TipoContencao::Atirantada | TipoContencao::Grampeado) {
         super::widgets::caixa(ui, &mut d.dhp, "Drenos sub-horizontais profundos (DHP)");

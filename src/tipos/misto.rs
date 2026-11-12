@@ -767,7 +767,8 @@ mod testes {
     #[test]
     fn otimizador_acha_misto_que_atende() {
         for fund in [FundacaoMisto::Estacas, FundacaoMisto::Sapata] {
-            let p = misto(2.0, fund);
+            let mut p = misto(2.0, fund);
+            p.drenagem.pe_em_rede = true;
             let o = crate::otimizar::otimizar(&p);
             let m = o.melhor.clone().unwrap_or_else(|| panic!("{fund:?}: {}", o.mensagem(crate::otimizar::custo(&p))));
             assert!(m.projeto.calcular().atende());

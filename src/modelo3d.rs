@@ -990,9 +990,9 @@ impl Modelo3d {
                         material: Material::Brita,
                         forma: Forma::Extrusao { secao: env.to_vec(), z0: 0.0, z1: l },
                     });
-                    Some([(env[0][0] + env[1][0]) / 2.0, (env[0][1] + env[2][1]) / 2.0])
+                    gd.dreno_pe.or(Some([(env[0][0] + env[1][0]) / 2.0, (env[0][1] + env[2][1]) / 2.0]))
                 }
-                (None, Some((p0, _))) if gd.filtro_continuo => Some([p0[0] + dr.esp_filtro / 2.0, p0[1] + dpe * 0.7]),
+                (None, Some(_)) if gd.filtro_continuo => gd.dreno_pe,
                 _ => None,
             };
             if let Some([x, y]) = centro {
@@ -1002,6 +1002,18 @@ impl Modelo3d {
                     material: Material::Pvc,
                     forma: Forma::Barra { p0: pt(x, y, 0.0), p1: pt(x, y, l), diam: dpe },
                 });
+            }
+            // saídas do dreno de pé pelo paramento, acima do reaterro frontal
+            if let Some((a, b)) = gd.saida_pe {
+                let d_s = (dr.diam_barbaca_mm / 1000.0).max(0.04);
+                for z in posicoes(l, crate::drenagem::ESP_SAIDA_PE) {
+                    self.pecas.push(Peca {
+                        nome: format!("Saída do dreno de pé — PVC Ø{} mm", fmt0(dr.diam_barbaca_mm)),
+                        classe: Classe::Tubo,
+                        material: Material::Pvc,
+                        forma: Forma::Barra { p0: pt(a[0], a[1], z), p1: pt(b[0], b[1], z), diam: d_s },
+                    });
+                }
             }
         }
         for c in &gd.canaletas {

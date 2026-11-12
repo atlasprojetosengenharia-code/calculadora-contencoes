@@ -201,6 +201,7 @@ fn texto(r: &str) -> Option<&'static str> {
             drenos e impede o carreamento de finos.",
         "Espessura" => "Espessura da camada drenante no tardoz.",
         "Dreno de pé (tubo perfurado) Ø" => "Tubo perfurado na base do tardoz que coleta a água e a leva para fora do muro.",
+        "Dreno de pé ligado a caixa/rede coletora abaixo do terreno" => "Marcado: o dreno de pé fica na base e descarrega por gravidade, ao longo do muro, em caixas de passagem ou rede pluvial com fundo abaixo dele, sem lâmina residual. Desmarcado: o dreno sai pelo paramento e é elevado para a saída ficar 15 cm acima do terreno à frente; a água abaixo dessa cota entra no cálculo.",
         "Canaleta de crista" => "Canaleta no topo que intercepta a água superficial antes de infiltrar no aterro.",
         "Drenos sub-horizontais profundos (DHP)" => "Drenos perfurados no maciço que rebaixam o nível d'água.",
         "Comprimento" => "Comprimento dos drenos sub-horizontais.",

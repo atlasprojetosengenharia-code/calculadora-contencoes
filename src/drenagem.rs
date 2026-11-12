@@ -19,6 +19,10 @@ pub const ESP_MIN_FILTRO: f64 = 0.30;
 /// Barbacã: entrada no maciço (coleta) e saída além da face (pingadeira), m.
 pub const BARBACA_ENTRADA: f64 = 0.20;
 pub const BARBACA_SAIDA: f64 = 0.15;
+/// Folga mínima entre a saída da drenagem (barbacãs, dreno de pé) e o terreno acabado à frente (m).
+pub const FOLGA_SAIDA: f64 = 0.15;
+/// Espaçamento das saídas do dreno de pé através do paramento (m).
+pub const ESP_SAIDA_PE: f64 = 3.0;
 /// Bolsa drenante de brita envolta em geotêxtil na entrada de cada barbacã: lado da seção e extensão ao longo da contenção (m).
 pub const BOLSA_LADO: f64 = 0.30;
 pub const BOLSA_COMP: f64 = 0.40;
@@ -138,6 +142,10 @@ pub struct Drenagem {
     pub gramatura: f64,
 
     pub dreno_pe: bool,
+    /// Dreno de pé descarrega longitudinalmente em caixa/rede coletora abaixo do terreno
+    /// (em vez de sair pelo paramento): pode ficar na base, sem lâmina residual.
+    #[serde(default)]
+    pub pe_em_rede: bool,
     pub diam_dreno_pe_mm: f64,
     pub canaleta_crista: bool,
 
@@ -165,6 +173,7 @@ impl Default for Drenagem {
             brita: TipoBrita::N2,
             gramatura: 200.0,
             dreno_pe: true,
+            pe_em_rede: false,
             diam_dreno_pe_mm: 100.0,
             canaleta_crista: true,
             dhp: false,
@@ -307,10 +316,6 @@ impl Drenagem {
                 MaterialFiltro::BritaGeotextil => d.pedras(&quad, e * 0.3),
                 MaterialFiltro::Geocomposto => {}
             }
-        }
-        if self.dreno_pe {
-            let r = (self.diam_dreno_pe_mm / 1000.0).max(0.06);
-            d.circulo(Estilo::Barbaca, [p0[0] + e / 2.0, p0[1] + r * 1.4], r);
         }
     }
 

@@ -449,7 +449,7 @@ impl Projeto {
     }
 
     fn perfil_calc(&self) -> crate::solo::Perfil {
-        let na = self.drenagem.na_efetivo(self.sondagem.na(), self.altura_contida(), self.tipo);
+        let na = self.na_calculo();
         // muros: o tardoz é reaterro compactado de material especificado
         if self.reaterro.usar && matches!(self.tipo, TipoContencao::Gravidade | TipoContencao::Flexao) {
             return self.reaterro.perfil(&self.sondagem, na);
@@ -632,8 +632,7 @@ impl Projeto {
         g.empuxo = self.empuxo_calc();
         // água no maciço (condição de drenagem): altura acima do pé da escavação
         g.hw = self
-            .drenagem
-            .na_efetivo(self.sondagem.na(), g.h, self.tipo)
+            .na_calculo()
             .map(|n| (g.h - n).max(0.0))
             .unwrap_or(0.0);
         if g.auto_dim {
@@ -701,8 +700,8 @@ impl Projeto {
         cab.push(t(format!(
             "NA da sondagem: {} ; NA adotado no cálculo: {}",
             s.na().map(|n| format!("{} m", fmt(n))).unwrap_or("não encontrado".into()),
-            self.drenagem
-                .na_efetivo(s.na(), self.altura_contida(), self.tipo)
+            self
+                .na_calculo()
                 .map(|n| format!("{} m (condição: {})", fmt(n), self.drenagem.condicao_efetiva(self.tipo).nome()))
                 .unwrap_or(format!("sem água (condição: {})", self.drenagem.condicao_efetiva(self.tipo).nome()))
         )));
@@ -812,8 +811,15 @@ impl Projeto {
         use crate::drenagem::{BARBACA_ENTRADA, BARBACA_SAIDA};
         // barbacã: do tardoz (xt) à face (xf), com caimento para fora; o tubo entra
         // 20 cm no maciço (coleta) e sai 15 cm da face (pingadeira: a água não escorre no paramento)
+        // saída do barbacã (geratriz inferior) ≥ terreno acabado à frente + 15 cm
+        let y_frente = self.cota_terreno_frente();
         let barb = |gd: &mut GeoDrenagem, xt: f64, xf: f64, y: f64| {
             let i = dr.declividade / 100.0;
+            let mut y = y;
+            if let Some(yf) = y_frente {
+                let saida = y - i * ((xt - xf).abs() + BARBACA_SAIDA) - dr.diam_barbaca_mm / 2000.0;
+                y += (yf + crate::drenagem::FOLGA_SAIDA - saida).max(0.0);
+            }
             let s = if xt >= xf { 1.0 } else { -1.0 };
             let t = [xt + s * BARBACA_ENTRADA, y + i * BARBACA_ENTRADA];
             let f = [xf - s * BARBACA_SAIDA, y - i * ((xt - xf).abs() + BARBACA_SAIDA)];
@@ -938,6 +944,42 @@ impl Projeto {
         } else {
             gd.filtro_continuo = gd.filtro.is_some();
         }
+        // dreno de pé ACIMA do terreno acabado à frente (reaterro frontal), com saídas
+        // pelo paramento: geratriz inferior da saída ≥ terreno + 15 cm, escoamento livre
+        // por gravidade (abaixo dele fica a lâmina residual considerada no empuxo)
+        gd.y_frente = self.cota_terreno_frente();
+        if let (Some((p0, _)), true, Some(yf)) = (gd.filtro, dr.dreno_pe, gd.y_frente) {
+            let yf = if dr.pe_em_rede { f64::NEG_INFINITY } else { yf };
+            use crate::drenagem::{BARBACA_SAIDA, FOLGA_SAIDA};
+            let r_t = (dr.diam_dreno_pe_mm / 2000.0).max(0.03);
+            let l_env = crate::drenagem::BOLSA_LADO.max(dr.esp_filtro.min(0.5));
+            let (x, y_orig) = match gd.envelope_pe {
+                Some(_) => (p0[0] + l_env / 2.0, p0[1] + l_env / 2.0),
+                None => (p0[0] + dr.esp_filtro / 2.0, p0[1] + 1.4 * r_t),
+            };
+            let face = |y: f64| -> f64 {
+                match self.tipo {
+                    TipoContencao::Gravidade => self.preparar_gravidade().faces(y).0,
+                    TipoContencao::Flexao => self.preparar_flexao().b_ponta,
+                    TipoContencao::Atirantada => -self.preparar_atirantada().espessura,
+                    TipoContencao::Grampeado => {
+                        let g = self.preparar_grampeado();
+                        y * rad(g.incl_face).tan() - g.espessura_face.max(0.02 * g.h)
+                    }
+                    _ => 0.0,
+                }
+            };
+            let i = dr.declividade.max(1.0) / 100.0;
+            let comp = (x - face(y_orig)).abs() + BARBACA_SAIDA;
+            let y_c = y_orig.max(yf + FOLGA_SAIDA + r_t + i * comp);
+            let xf = face(y_c);
+            gd.dreno_pe = Some([x, y_c]);
+            gd.saida_pe = (!dr.pe_em_rede).then_some(([x, y_c], [xf - BARBACA_SAIDA, y_c - i * ((x - xf).abs() + BARBACA_SAIDA)]));
+            if gd.envelope_pe.is_some() {
+                let h = l_env / 2.0;
+                gd.envelope_pe = Some([[x - h, y_c - h], [x + h, y_c - h], [x + h, y_c + h], [x - h, y_c + h]]);
+            }
+        }
         gd
     }
 
@@ -958,9 +1000,12 @@ impl Projeto {
             d.poli(crate::resultado::Estilo::Dreno, b.to_vec());
             d.pedras(&b.to_vec(), 0.08);
         }
-        if let Some(e) = gd.envelope_pe {
-            let r = (dr.diam_dreno_pe_mm / 1000.0).max(0.06) / 2.0;
-            d.circulo(crate::resultado::Estilo::Barbaca, [(e[0][0] + e[1][0]) / 2.0, (e[0][1] + e[2][1]) / 2.0], r);
+        // dreno de pé (na cota acima do reaterro frontal) e a saída através do paramento
+        if let Some(c) = gd.dreno_pe {
+            d.circulo(crate::resultado::Estilo::Barbaca, c, (dr.diam_dreno_pe_mm / 2000.0).max(0.03));
+        }
+        if let Some((a, b)) = gd.saida_pe {
+            d.tracejada(crate::resultado::Estilo::Barbaca, vec![a, b]);
         }
         for c in &gd.canaletas {
             d.canaleta(c[0], c[1]);
@@ -971,6 +1016,46 @@ impl Projeto {
         dr.relatar(r, self.altura_contida(), &gd.larguras, gd.altura_filtro, self.tipo);
         if !gd.bolsas.is_empty() || gd.envelope_pe.is_some() {
             dr.relatar_bolsas(r, gd.bolsas.len(), gd.envelope_pe.is_some());
+        }
+        // saídas acima do reaterro frontal (escoamento livre, sem afogamento nem colmatação)
+        if let Some(yf) = gd.y_frente {
+            use crate::drenagem::FOLGA_SAIDA;
+            use crate::resultado::{fmt, Verificacao};
+            let d_b = dr.diam_barbaca_mm / 2000.0;
+            let folga_barb = gd.barbacas.iter().map(|(_, f)| f[1] - d_b - yf).fold(f64::INFINITY, f64::min);
+            if folga_barb.is_finite() {
+                r.verif(Verificacao::min("Barbacãs: saída acima do terreno acabado à frente (folga ≥ 15 cm)", folga_barb, FOLGA_SAIDA, "m"));
+            }
+            if let (Some(c), Some((_, b))) = (gd.dreno_pe, gd.saida_pe) {
+                let r_t = (dr.diam_dreno_pe_mm / 2000.0).max(0.03);
+                r.linha(format!(
+                    "Dreno de pé com eixo a {} m (geratriz inferior {} m) e saídas Ø{} mm pelo paramento a cada {} m, descarga a {} m: acima do terreno acabado à frente ({} m), com escoamento livre para a canaleta de pé.",
+                    fmt(c[1]), fmt(c[1] - r_t), format!("{:.0}", dr.diam_barbaca_mm), fmt(crate::drenagem::ESP_SAIDA_PE), fmt(b[1] - d_b), fmt(yf)
+                ));
+                r.verif(Verificacao::min("Dreno de pé: saída acima do terreno acabado à frente (folga ≥ 15 cm)", b[1] - d_b - yf, FOLGA_SAIDA, "m"));
+            }
+            if dr.dreno_pe && dr.pe_em_rede {
+                r.linha("Dreno de pé na base, com declividade longitudinal ≥ 1 % até caixas de passagem/rede pluvial com fundo abaixo da geratriz inferior do dreno (descarga por gravidade, sem saída pelo paramento) ; sem lâmina residual no tardoz.");
+            }
+            let hres = self.lamina_residual();
+            if hres > 1e-6 && dr.condicao_efetiva(self.tipo) != crate::drenagem::Condicao::SemDrenagem {
+                r.formula(
+                    "Lâmina d'água residual abaixo da saída mais baixa",
+                    "hw,res = cota da saída mais baixa − base da altura contida ;  u = γw·(hw,res − z')  (empuxo e subpressão)",
+                    format!("terreno à frente na cota {} m ; folga mínima das saídas {} m", fmt(yf), fmt(FOLGA_SAIDA)),
+                    format!("hw,res = {} m — considerada no empuxo, na subpressão e na estabilidade global", fmt(hres)),
+                );
+            }
+            r.verif(Verificacao::min("Barbacãs: declividade ≥ 3 % para fora (critério de projeto)", dr.declividade, 3.0, "%"));
+            if dr.dreno_pe {
+                r.verif(Verificacao::min("Dreno de pé: Ø ≥ 100 mm (critério de projeto)", dr.diam_dreno_pe_mm, 100.0, "mm"));
+            }
+            if dr.filtro && dr.material_filtro != crate::drenagem::MaterialFiltro::Geocomposto {
+                r.verif(Verificacao::min("Geotêxtil não tecido: gramatura ≥ 200 g/m² (filtro contra colmatação)", dr.gramatura, 200.0, "g/m²"));
+            }
+            r.linha(
+                "Reaterro frontal: solo compactado em camadas (≥ 95 % do Proctor normal, NBR 7182), superfície acabada com caimento ≥ 2 % para a canaleta de pé, sem cobrir nem obstruir as saídas de barbacãs e do dreno de pé ; camada superficial pouco permeável (solo argiloso ou grama) para reduzir a infiltração junto ao pé do muro.",
+            );
         }
     }
 }
@@ -1091,6 +1176,9 @@ impl Projeto {
         }
         if dr.dreno_pe && gd.filtro.is_some() {
             q.push(("Tubo PVC perfurado", format!("dreno de pé Ø{} mm", f0(dr.diam_dreno_pe_mm)), 1.0, "m/m"));
+            if let Some((a, b)) = gd.saida_pe {
+                q.push(("Tubo PVC", format!("saídas do dreno de pé Ø{} mm a cada {} m", f0(dr.diam_barbaca_mm), fmt(crate::drenagem::ESP_SAIDA_PE)), (a[0] - b[0]).abs() / crate::drenagem::ESP_SAIDA_PE, "m/m"));
+            }
         }
         if !gd.canaletas.is_empty() {
             q.push(("Canaleta de concreto", "meia-cana / U (crista e pé)".into(), gd.canaletas.len() as f64, "m/m"));
@@ -1121,6 +1209,67 @@ impl Projeto {
     }
 }
 
+
+impl Projeto {
+    /// Cota do terreno acabado à frente da contenção (reaterro frontal / pé da escavação),
+    /// nas coordenadas da seção de cada tipo; `None` nas paredes sem drenagem.
+    pub fn cota_terreno_frente(&self) -> Option<f64> {
+        match self.tipo {
+            TipoContencao::Gravidade | TipoContencao::Flexao => Some(self.geometria.engaste.max(0.0)),
+            TipoContencao::Atirantada => Some(-self.geometria.h),
+            TipoContencao::Grampeado => Some(0.0),
+            _ => None,
+        }
+    }
+
+    /// Lâmina d'água residual no tardoz (m acima da base da altura contida): a água
+    /// abaixo da saída mais baixa (geratriz inferior do dreno de pé ou saída da 1ª fila
+    /// de barbacãs) não é drenada por gravidade. As saídas ficam ≥ 15 cm acima do terreno
+    /// à frente; abaixo delas, a água permanece e entra no empuxo e na subpressão.
+    pub fn lamina_residual(&self) -> f64 {
+        use crate::drenagem::FOLGA_SAIDA;
+        let dr = &self.drenagem;
+        let Some(frente) = self.cota_terreno_frente() else { return 0.0 };
+        // base da altura contida, nas mesmas coordenadas
+        let (base, topo_fundacao) = match self.tipo {
+            TipoContencao::Gravidade => (0.0, self.gravidade.f),
+            TipoContencao::Flexao => {
+                let hs = if self.flexao.sistema == crate::tipos::misto::Sistema::Misto && self.flexao.misto.fundacao_estacas() {
+                    self.flexao.misto.baldrame_h
+                } else {
+                    self.flexao.h_sapata
+                };
+                (0.0, hs)
+            }
+            TipoContencao::Atirantada => (-self.geometria.h, -self.geometria.h),
+            _ => (0.0, 0.0),
+        };
+        let saida = if dr.dreno_pe && dr.filtro && dr.pe_em_rede {
+            return 0.0; // descarga longitudinal em caixa/rede abaixo do dreno: sem lâmina residual
+        } else if dr.dreno_pe && dr.filtro {
+            topo_fundacao.max(frente + FOLGA_SAIDA)
+        } else if dr.barbacas {
+            frente + dr.altura_1a_fila.max(FOLGA_SAIDA)
+        } else {
+            return 0.0;
+        };
+        (saida - base).max(0.0)
+    }
+
+    /// Nível d'água no tardoz adotado no cálculo (profundidade a partir do topo):
+    /// condição de drenagem + lâmina residual abaixo das saídas + NA da sondagem.
+    pub fn na_calculo(&self) -> Option<f64> {
+        let altura = self.altura_contida();
+        let na = self.drenagem.na_efetivo(self.sondagem.na(), altura, self.tipo);
+        let hres = self.lamina_residual();
+        if hres <= 1e-6 || self.drenagem.condicao_efetiva(self.tipo) == crate::drenagem::Condicao::SemDrenagem {
+            return na;
+        }
+        let z = (altura - hres).max(0.0);
+        Some(na.map_or(z, |n| n.min(z)))
+    }
+}
+
 /// Geometria da drenagem na seção transversal.
 #[derive(Clone, Debug, Default)]
 pub struct GeoDrenagem {
@@ -1143,6 +1292,11 @@ pub struct GeoDrenagem {
     pub bolsas: Vec<[[f64; 2]; 4]>,
     /// Envelope de brita + geotêxtil do dreno de pé (seção).
     pub envelope_pe: Option<[[f64; 2]; 4]>,
+    /// Dreno de pé: centro do tubo (seção) e saída através do paramento (início, fim).
+    pub dreno_pe: Option<[f64; 2]>,
+    pub saida_pe: Option<([f64; 2], [f64; 2])>,
+    /// Cota do terreno acabado à frente (reaterro frontal).
+    pub y_frente: Option<f64>,
 }
 
 #[cfg(test)]
@@ -1663,6 +1817,40 @@ mod testes_resumos {
             for a in r.armaduras.iter().filter(|a| !matches!(a.forma, crate::armadura::Forma::Helice { .. })) {
                 assert!(a.comprimento_m < limite, "{}: {} com {} m", tipo.nome(), a.pos, a.comprimento_m);
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod testes_drenagem_reaterro {
+    use super::*;
+    use crate::drenagem::FOLGA_SAIDA;
+
+    #[test]
+    fn saidas_acima_do_terreno_frontal_e_lamina_residual() {
+        for tipo in [TipoContencao::Gravidade, TipoContencao::Flexao, TipoContencao::Atirantada, TipoContencao::Grampeado] {
+            let mut p = Projeto::default();
+            p.tipo = tipo;
+            p.geometria.h = 3.0;
+            p.pre_dimensionar();
+            p.drenagem.altura_1a_fila = 0.05; // valor baixo de propósito: o programa deve elevar
+            let gd = p.geo_drenagem();
+            let yf = gd.y_frente.expect("terreno à frente");
+            let d_b = p.drenagem.diam_barbaca_mm / 2000.0;
+            for (_, f) in &gd.barbacas {
+                assert!(f[1] - d_b - yf >= FOLGA_SAIDA - 1e-9, "{}: barbacã a {} m (terreno {})", tipo.nome(), f[1], yf);
+            }
+            let (c, (_, b)) = (gd.dreno_pe.expect("dreno"), gd.saida_pe.expect("saída"));
+            assert!(b[1] - d_b - yf >= FOLGA_SAIDA - 1e-9, "{}: saída do dreno", tipo.nome());
+            assert!(c[1] > yf, "{}: dreno acima do terreno", tipo.nome());
+            // condição drenada: a lâmina residual vira nível d'água no cálculo
+            let hres = p.lamina_residual();
+            assert!(hres > 0.0);
+            let na = p.na_calculo().expect("lâmina residual no cálculo");
+            assert!((p.altura_contida() - na - hres).abs() < 1e-9, "{}", tipo.nome());
+            // ligado à rede: dreno na base, sem saída pela face nem lâmina
+            p.drenagem.pe_em_rede = true;
+            assert!(p.geo_drenagem().saida_pe.is_none());
         }
     }
 }
