@@ -173,7 +173,15 @@ fn ajustar_estrutura(p: &mut Projeto) {
                     mi.pilar_b = crate::projeto::arred(mi.pilar_b + 0.05);
                     ch = true;
                 }
-                if tem("Bloco: tirante") {
+                if (tem("Bloco: inclinação das bielas θ ≥") || tem("Bloco: ancoragem")) && mi.baldrame_h < 1.5 {
+                    mi.baldrame_h = crate::projeto::arred(mi.baldrame_h + 0.10); // eleva a altura do bloco
+                    ch = true;
+                }
+                if tem("Bloco: tensão na biela junto ao pilar") && mi.pilar_b < 0.60 {
+                    mi.pilar_b = crate::projeto::arred(mi.pilar_b + 0.05);
+                    ch = true;
+                }
+                if tem("Bloco: tirante") || tem("Bloco: tensão na biela junto à estaca") {
                     if let Some(d) = crate::tipos::misto::DIAM_ESTACA.iter().find(|d| **d > mi.diam_estaca + 1e-9) {
                         mi.diam_estaca = *d;
                         ch = true;

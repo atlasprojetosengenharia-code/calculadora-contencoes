@@ -524,6 +524,20 @@ fn secao_misto(d: &mut Desenho, det: Detalhe, cx: f64, cy: f64, k: f64, proj: &P
             let perna = (hb - 2.0 * cob).min(12.0 * f + 0.1);
             let xa = lb / 2.0 - cob;
             d.linha(Estilo::Armadura, vec![t(-xa, y + perna), t(-xa, y), t(xa, y), t(xa, y + perna)]);
+            // gaiola: armadura superior (U invertido) e estribos verticais
+            if let Some(n15) = arm(res, "N15") {
+                let ys = hb / 2.0 - cob - n15.bitola_mm / 2000.0;
+                let ps = (12.0 * n15.bitola_mm / 1000.0 + 0.1).min(hb - 2.0 * cob);
+                d.linha(Estilo::Armadura, vec![t(-xa, ys - ps), t(-xa, ys), t(xa, ys), t(xa, ys - ps)]);
+            }
+            if let Some(n17) = arm(res, "N17") {
+                let s = n17.espac_cm.unwrap_or(15.0) / 100.0;
+                let mut x = -xa;
+                while x <= xa + 1e-9 {
+                    d.linha(Estilo::Armadura, vec![t(x, -hb / 2.0 + cob), t(x, hb / 2.0 - cob)]);
+                    x += s;
+                }
+            }
             if let Some(n1) = arm(res, "N1") {
                 // arranques do pilar com dobra de 90° (12Ø) sobre o tirante
                 let x1 = ap / 2.0 - cob - n1.bitola_mm / 2000.0;
@@ -534,7 +548,7 @@ fn secao_misto(d: &mut Desenho, det: Detalhe, cx: f64, cy: f64, k: f64, proj: &P
             d.cota_h(t(-lb / 2.0, 0.0)[0], t(lb / 2.0, 0.0)[0], y_cota, y_cota + 0.2 * k, 0.07 * k, format!("{} m", fmt(lb)));
             d.cota_v(t(0.0, -hb / 2.0)[1], t(0.0, hb / 2.0)[1], cx - esc * lb / 2.0 - 0.2 * k, cx - esc * lb / 2.0, 0.07 * k, format!("{} m", fmt(hb)));
             d.texto([cx, cy + esc * hb + 0.25 * k], format!("BLOCO SOBRE 2 ESTACAS - corte perpendicular ao muro (e = {} m)", fmt(e)));
-            for (i, s) in [desc("N11"), "tirante concentrado sobre as estacas (faixa ≤ 1,2·Ø) ; estacas embutidas 5 cm".to_string(), desc("N1")].iter().enumerate() {
+            for (i, s) in [desc("N11"), desc("N15"), desc("N16"), desc("N17"), "gaiola: tirante concentrado sobre as estacas (faixa ≤ 1,2·Ø) ; estacas embutidas 5 cm".to_string()].iter().enumerate() {
                 d.texto([cx, y_cota - (0.40 + 0.16 * i as f64) * k], s.clone());
             }
         }

@@ -159,6 +159,12 @@ pub struct EstacaDim {
     /// Hélice pelo cortante (Ø mm, passo cm).
     pub phi_helice: f64,
     pub s_helice: f64,
+    /// Gaiola do bloco: As superior (cm²), pele por face (cm²) e espaçamento (cm), estribos verticais (Ø mm, s cm).
+    pub as_sup: f64,
+    pub as_pele: f64,
+    pub s_pele: f64,
+    pub phi_estribo_bloco: f64,
+    pub s_estribo_bloco: f64,
 }
 
 /// Resultado do dimensionamento do sistema misto (para o detalhamento e o desenho).
@@ -177,6 +183,11 @@ pub struct DimMisto {
     pub baldrame_n: usize,
     pub baldrame_phi: f64,
     pub estacas: Option<EstacaDim>,
+}
+
+/// Área da seção de uma estaca de diâmetro d (m²).
+fn ap_est_area(d: f64) -> f64 {
+    PI * d * d / 4.0
 }
 
 fn area(phi_mm: f64) -> f64 {
@@ -654,17 +665,113 @@ impl Misto {
         if as_flex.is_none() {
             r.aviso("Estaca: seção insuficiente para o momento da carga horizontal mesmo com 4 % de armadura — aumentar o diâmetro.");
         }
-        // bloco rígido sobre 2 estacas — método das bielas (Blévot)
-        let db_b = h_bloco - 0.06;
-        let rs = n_comp.max(0.0) * gf * (e / 2.0 - self.pilar_h / 4.0) / db_b;
-        let as_bloco = (rs / (c.fyk / fat.gamma_s * 1000.0) * 1e4).max(0.00075 * b_bloco * h_bloco * 1e4);
+        // ---- bloco sobre 2 estacas: bielas (Blévot) + flexão (gaiola) — NBR 6118 22.7 ----
+        // Em contenção o bloco recebe momento (empuxo) e força horizontal: uma estaca fica
+        // muito mais carregada que a outra e a outra pode ficar tracionada. Por isso, além do
+        // tirante das bielas, o bloco é dimensionado à flexão nas duas faces e armado em gaiola.
+        let (ap, bp) = (self.pilar_h, self.pilar_b);
+        let db_b = h_bloco - cob - 0.0125 - 0.05; // tirante acima do topo das estacas (embutidas 5 cm)
+        let fcd = c.fck / fat.gamma_c;
+        let fyd = c.fyk / fat.gamma_s;
+        // bielas (Blévot): inclinação e tensões junto ao pilar e às estacas
+        let tg = db_b / (e / 2.0 - ap / 4.0).max(0.05);
+        let theta = tg.atan();
+        let sen2 = theta.sin().powi(2);
+        let nd_bloco = gf * 2.0 * n_comp.max(0.0); // reação de cálculo das 2 estacas (estaca mais carregada × 2)
+        let sig_pilar = nd_bloco / (ap * bp * sen2) / 1000.0;
+        let sig_estaca = gf * n_comp.max(0.0) / (ap_est_area(d) * sen2) / 1000.0;
+        let sig_lim = 1.4 * 0.95 * fcd;
+        let rs = n_comp.max(0.0) * gf * (e / 2.0 - ap / 4.0) / db_b;
+        let as_bielas = rs / (fyd * 1000.0) * 1e4;
         r.formula(
-            "Bloco — tirante (método das bielas, Blévot)",
-            "Rs = γf·Nest·(e/2 − ap/4)/d ;  As = Rs/fyd",
-            format!("Nest = {} kN ;  e = {} m ;  ap = {} m ;  d = {} m", fmt(n_comp), fmt(e), fmt(self.pilar_h), fmt(db_b)),
-            format!("Rs = {} kN ;  As = {} cm²", fmt(rs), fmt(as_bloco)),
+            "Bloco — bielas e tirante (Blévot)",
+            "tg θ = d/(e/2 − ap/4), 45° ≤ θ ≤ 55° ;  σc,pilar = Nd/(Ap·sen²θ) ;  σc,estaca = Nest,d/(Aest·sen²θ) ≤ 1,4·kR·fcd ;  Rs = Nest,d·(e/2 − ap/4)/d",
+            format!("d = {} m ;  e = {} m ;  ap = {} m ;  Nest = {} kN", fmt(db_b), fmt(e), fmt(ap), fmt(n_comp)),
+            format!("θ = {}° ;  σ pilar = {} MPa ;  σ estaca = {} MPa (lim {}) ;  As,bielas = {} cm²", fmt(theta.to_degrees()), fmt(sig_pilar), fmt(sig_estaca), fmt(sig_lim), fmt(as_bielas)),
         );
-        dm.estacas = Some(EstacaDim { comprimento: l, n_comp, n_trac, h: h_est, q_adm, qt_adm, e, bloco: [l_bloco, b_bloco, h_bloco], as_bloco, n_barras: n_est, phi: phi_est, l_armada: l_arm, phi_helice: phi_h, s_helice: s_h });
+        r.verif(Verificacao::min("Bloco: inclinação das bielas θ ≥ 45° (bloco rígido)", theta.to_degrees(), 45.0, "°"));
+        r.verif(Verificacao::max("Bloco: inclinação das bielas θ ≤ 55°", theta.to_degrees(), 55.0, "°"));
+        r.verif(Verificacao::max("Bloco: tensão na biela junto ao pilar (Blévot)", sig_pilar, sig_lim, "MPa"));
+        r.verif(Verificacao::max("Bloco: tensão na biela junto à estaca (Blévot)", sig_estaca, sig_lim, "MPa"));
+        // flexão: seção na face do pilar (a 0,15·ap para dentro), reação da estaca × braço
+        let braco = (e / 2.0 - 0.35 * ap).max(0.05);
+        let md_inf = gf * n_comp.max(0.0) * braco;
+        let md_sup = gf * (-n_trac).max(0.0) * braco; // estaca tracionada: tração na face superior
+        let fl_inf = flexao_retangular(md_inf, b_bloco, h_bloco, db_b, c.fck, c.fyk, fat.gamma_c, fat.gamma_s);
+        let fl_sup = flexao_retangular(md_sup, b_bloco, h_bloco, h_bloco - cob - 0.0125, c.fck, c.fyk, fat.gamma_c, fat.gamma_s);
+        let as_min_bl = crate::concreto::rho_min(c.fck) * b_bloco * h_bloco * 1e4;
+        let as_bloco = as_bielas.max(fl_inf.as_calc).max(as_min_bl);
+        // armadura superior: flexão negativa (estaca tracionada) e, no mínimo, 1/5 da inferior
+        let as_sup = fl_sup.as_calc.max(0.2 * as_bloco).max(as_min_bl * 0.5);
+        r.formula(
+            "Bloco — flexão nas duas faces (seção na face do pilar, 0,15·ap para dentro)",
+            "Md,inf = γf·Nest,comp·(e/2 − 0,35·ap) ;  Md,sup = γf·Nest,tração·(e/2 − 0,35·ap) ;  As,inf = máx(bielas ; flexão ; ρmín·b·h) ;  As,sup ≥ máx(flexão ; As,inf/5)",
+            format!("b = {} m ;  h = {} m ;  braço = {} m ;  Md,inf = {} kN·m ;  Md,sup = {} kN·m", fmt(b_bloco), fmt(h_bloco), fmt(braco), fmt(md_inf), fmt(md_sup)),
+            format!("As,inf = {} cm² (bielas {} ; flexão {}) ;  As,sup = {} cm²", fmt(as_bloco), fmt(as_bielas), fmt(fl_inf.as_calc), fmt(as_sup)),
+        );
+        r.verif(Verificacao::max("Bloco: x/d na flexão (face inferior)", fl_inf.x_d, 0.45, ""));
+        // armadura de pele (faces laterais) e estribos verticais fechando a gaiola
+        let as_pele = (0.001 * b_bloco * h_bloco * 1e4).max(as_bloco / 8.0); // por face
+        let s_pele = (100.0 * db_b / 3.0).min(20.0).floor().max(10.0);
+        let vd = gf * n_comp.max(0.0);
+        let vrd1_bl = vrd1(b_bloco, db_b, as_bloco, c.fck, fat.gamma_c);
+        let vrd2_bl = 0.27 * (1.0 - c.fck / 250.0) * fcd * b_bloco * db_b * 1000.0;
+        let asw_min = 0.2 * 0.3 * c.fck.powf(2.0 / 3.0) / c.fyk * b_bloco * 1e4; // cm²/m
+        let asw_s = ((vd - vrd1_bl).max(0.0) / (0.9 * db_b * fyd.min(435.0) * 1000.0) * 1e4).max(asw_min);
+        let phi_e = if asw_s > 6.0 { 10.0 } else if asw_s > 3.5 { 8.0 } else { 6.3 };
+        let s_e = ((2.0 * area(phi_e) / asw_s * 100.0).floor()).min(20.0).min(100.0 * 0.6 * db_b).max(7.0);
+        r.formula(
+            "Bloco — gaiola: armadura de pele e estribos verticais",
+            "As,pele ≥ máx(0,10 %·b·h ; As,inf/8) por face, s ≤ mín(20 cm ; d/3) ;  Vd ≤ VRd2 ;  Asw/s = (Vd − VRd1)/(0,9·d·fywd) ≥ ρw,mín·b",
+            format!("Vd = {} kN ;  VRd1 = {} kN ;  VRd2 = {} kN", fmt(vd), fmt(vrd1_bl), fmt(vrd2_bl)),
+            format!("As,pele = {} cm² por face, s = {} cm ;  estribos Ø{} c/{} cm", fmt(as_pele), fmt(s_pele), crate::armadura::fmt_bitola(phi_e), fmt(s_e)),
+        );
+        r.verif(Verificacao::max("Bloco: Vd ≤ VRd2 (cisalhamento)", vd, vrd2_bl, "kN"));
+        // punção: estaca fora do cone de 45° a partir da face do pilar exige verificação
+        let folga_cone = (e / 2.0 - ap / 2.0 - d / 2.0) - db_b;
+        if folga_cone > 0.0 {
+            let u0 = 2.0 * (ap + bp);
+            let tau = nd_bloco / (u0 * db_b) / 1000.0;
+            let tau_rd2 = 0.27 * (1.0 - c.fck / 250.0) * fcd;
+            r.verif(Verificacao::max("Bloco: punção no contorno do pilar τSd ≤ τRd2 (NBR 6118 19.5.3.1)", tau, tau_rd2, "MPa"));
+        } else {
+            r.linha(format!(
+                "Punção: as estacas estão dentro do cone de 45° a partir da face do pilar (distância {} m ≤ d = {} m) — a transferência é por bielas, verificadas acima (NBR 6118 22.7.2).",
+                fmt((e / 2.0 - ap / 2.0 - d / 2.0).max(0.0)),
+                fmt(db_b)
+            ));
+        }
+        // ancoragem no bloco: barras da estaca e arranques do pilar (gancho de 90°: 0,7·lb)
+        let lb_est = crate::armadura::lb_basico(phi_est, c.fck, c.fyk, fat.gamma_c, fat.gamma_s, true) / 100.0;
+        let disp_est = h_bloco - 0.05 - cob - 0.0125;
+        r.formula(
+            "Ancoragem das armaduras no bloco (NBR 6118 9.4.2)",
+            "barras da estaca: comprimento disponível ≥ 0,7·lb (gancho de 90° sobre o tirante) ;  pilar: arranques até o fundo do bloco com dobra de 90°",
+            format!("Ø estaca = {} mm ;  lb = {} m ;  disponível = {} m", crate::armadura::fmt_bitola(phi_est), fmt(lb_est), fmt(disp_est)),
+            format!("0,7·lb = {} m", fmt(0.7 * lb_est)),
+        );
+        r.verif(Verificacao::min("Bloco: ancoragem das barras da estaca (0,7·lb com gancho)", disp_est, 0.7 * lb_est, "m"));
+        dm.estacas = Some(EstacaDim {
+            comprimento: l,
+            n_comp,
+            n_trac,
+            h: h_est,
+            q_adm,
+            qt_adm,
+            e,
+            bloco: [l_bloco, b_bloco, h_bloco],
+            as_bloco,
+            n_barras: n_est,
+            phi: phi_est,
+            l_armada: l_arm,
+            phi_helice: phi_h,
+            s_helice: s_h,
+            as_sup,
+            as_pele,
+            s_pele,
+            phi_estribo_bloco: phi_e,
+            s_estribo_bloco: s_e,
+        });
     }
 
     /// Vista superior (planta) de 2 vãos: pilares, painel, vigas, blocos, estacas e cotas.

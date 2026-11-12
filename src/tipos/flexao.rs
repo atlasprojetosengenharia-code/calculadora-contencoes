@@ -889,6 +889,52 @@ fn armaduras_vigas(d: &DimMisto, mi: &Misto, c: &Concreto) -> Vec<Armadura> {
             lb_cm: lb(phi),
             forma: Forma::EmU { vao: lbl - 2.0 * cob, perna: armadura::gancho_reto_cm(phi) / 100.0 },
         });
+        // gaiola do bloco: malha superior, pele nas faces laterais e estribos verticais (NBR 6118 22.7.4)
+        let [_, bbl, hbl] = e.bloco;
+        let (ns, phis) = super::misto::barras(e.as_sup, bbl, cob);
+        v.push(Armadura {
+            pos: "N15".into(),
+            elemento: "Bloco — armadura superior (gaiola)".into(),
+            bitola_mm: phis,
+            espac_cm: None,
+            quantidade: format!("{ns} por bloco"),
+            comprimento_m: lbl - 2.0 * cob + 2.0 * armadura::gancho_reto_cm(phis) / 100.0,
+            as_nec: e.as_sup,
+            as_ef: ns as f64 * area(phis),
+            unidade: "cm²",
+            lb_cm: lb(phis),
+            forma: Forma::EmU { vao: lbl - 2.0 * cob, perna: armadura::gancho_reto_cm(phis) / 100.0 },
+        });
+        let n_pele = ((hbl - 2.0 * cob) / (e.s_pele / 100.0)).floor().max(1.0) as usize;
+        let phip = [8.0, 10.0, 12.5, 16.0].into_iter().find(|p| n_pele as f64 * area(*p) >= e.as_pele).unwrap_or(16.0);
+        v.push(Armadura {
+            pos: "N16".into(),
+            elemento: format!("Bloco — armadura de pele (cada face lateral, c/{} cm)", fmt(e.s_pele)),
+            bitola_mm: phip,
+            espac_cm: Some(e.s_pele),
+            quantidade: format!("{} por bloco", 2 * n_pele),
+            comprimento_m: lbl - 2.0 * cob,
+            as_nec: e.as_pele,
+            as_ef: n_pele as f64 * area(phip),
+            unidade: "cm²",
+            lb_cm: lb(phip),
+            forma: Forma::Reta,
+        });
+        let (eb, eh) = ((bbl - 2.0 * cob).max(0.1), (hbl - 2.0 * cob).max(0.1));
+        let n_est = ((lbl - 2.0 * cob) / (e.s_estribo_bloco / 100.0)).floor() as usize + 1;
+        v.push(Armadura {
+            pos: "N17".into(),
+            elemento: "Bloco — estribos verticais (gaiola, 2 ramos)".into(),
+            bitola_mm: e.phi_estribo_bloco,
+            espac_cm: Some(e.s_estribo_bloco),
+            quantidade: format!("{n_est} por bloco"),
+            comprimento_m: 2.0 * (eb + eh) + 2.0 * armadura::gancho_estribo_cm(e.phi_estribo_bloco) / 100.0,
+            as_nec: 0.0,
+            as_ef: 2.0 * area(e.phi_estribo_bloco) * 100.0 / e.s_estribo_bloco,
+            unidade: "cm²/m",
+            lb_cm: 0.0,
+            forma: Forma::Estribo { b: eb, h: eh },
+        });
     }
     v
 }

@@ -298,6 +298,44 @@ fn flexao(p: &Projeto, _r: &Resultado, l: f64, g: &mut Gerador) {
         }
         g.add(n11, t);
     }
+    // gaiola do bloco: armadura superior (U invertido), pele nas faces laterais e estribos verticais
+    let (xa_b, xb_b) = (xc - lb_bl / 2.0 + c, xc + lb_bl / 2.0 - c);
+    let (ya_b, yb_b) = (y_bl + c, hs - c);
+    if let Some(n15) = g.pos("N15") {
+        let n = qtd(n15);
+        let mut t = Vec::new();
+        for &zc in &pilares {
+            let largura = bb_bl - 2.0 * c - 0.02;
+            for k in 0..n {
+                let z = if n > 1 { zc - largura / 2.0 + largura * k as f64 / (n - 1) as f64 } else { zc };
+                let perna = (12.0 * n15.bitola_mm / 1000.0 + 0.1).min(yb_b - ya_b);
+                tubo(&[[xa_b, yb_b - perna, z], [xa_b, yb_b, z], [xb_b, yb_b, z], [xb_b, yb_b - perna, z]], n15.bitola_mm, &mut t);
+            }
+        }
+        g.add(n15, t);
+    }
+    if let Some(n16) = g.pos("N16") {
+        let s = n16.espac_cm.unwrap_or(15.0) / 100.0;
+        let mut t = Vec::new();
+        for &zc in &pilares {
+            for y in ao_longo(ya_b + 0.08, yb_b - 0.08, s) {
+                for z in [zc - bb_bl / 2.0 + c + 0.01, zc + bb_bl / 2.0 - c - 0.01] {
+                    tubo(&[[xa_b, y, z], [xb_b, y, z]], n16.bitola_mm, &mut t);
+                }
+            }
+        }
+        g.add(n16, t);
+    }
+    if let Some(n17) = g.pos("N17") {
+        let mut t = Vec::new();
+        for &zc in &pilares {
+            let (za, zb) = (zc - bb_bl / 2.0 + c, zc + bb_bl / 2.0 - c);
+            for x in ao_longo(xa_b, xb_b, n17.espac_cm.unwrap_or(15.0) / 100.0) {
+                estribo([[x, ya_b, za], [x, ya_b, zb], [x, yb_b, zb], [x, yb_b, za]], n17.bitola_mm, &mut t);
+            }
+        }
+        g.add(n17, t);
+    }
     // estacas: 5 longitudinais no trecho armado (ancoradas no bloco) + hélice N14
     if let Some(n10) = g.pos("N10") {
         let f = n10.bitola_mm / 1000.0;

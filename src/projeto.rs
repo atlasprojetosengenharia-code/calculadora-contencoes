@@ -783,6 +783,7 @@ impl Projeto {
             r.aviso("Camadas coesivas com c' e φ' padrão (condição drenada) — ajustar com base em ensaios (NBR 11682 Anexo D).");
         }
         r.aviso("Parâmetros obtidos por correlações com o SPT são estimativas; confirmar com ensaios de laboratório/campo.");
+        self.verificar_reaterro_frontal(&mut r);
         self.quantitativos(&mut r);
         cab.append(&mut r.blocos);
         r.blocos = cab;
@@ -1186,15 +1187,34 @@ impl Projeto {
         if !gd.dhp.is_empty() {
             q.push(("DHP", format!("tubos de {} m", fmt(dr.dhp_comprimento)), gd.dhp.len() as f64 * dr.dhp_comprimento / dr.dhp_espacamento.max(0.5), "m/m"));
         }
+        // conexões dos tubos (barras comerciais de 6 m ; trechos de 20 m entre juntas)
+        if !gd.barbacas.is_empty() {
+            q.push(("Conexões", "tela/geotêxtil de proteção na entrada dos barbacãs".into(), gd.barbacas.len() as f64 / dr.esp_h.max(0.3), "un/m"));
+        }
+        if dr.dreno_pe && gd.dreno_pe.is_some() {
+            let dn = f0(dr.diam_dreno_pe_mm);
+            q.push(("Conexões", format!("luvas de emenda do dreno de pé DN {dn} (barras de 6 m)"), 1.0 / 6.0, "un/m"));
+            if gd.saida_pe.is_some() {
+                q.push(("Conexões", format!("tês de redução DN {dn} × {} (ligação dreno–saída, a cada {} m)", f0(dr.diam_barbaca_mm), fmt(crate::drenagem::ESP_SAIDA_PE)), 1.0 / crate::drenagem::ESP_SAIDA_PE, "un/m"));
+                q.push(("Conexões", format!("tampões cegos DN {dn} nas extremidades dos trechos (a cada 20 m)"), 2.0 / 20.0, "un/m"));
+            } else if dr.pe_em_rede {
+                q.push(("Conexões", "caixas de passagem com tampa (a cada 20 m, fundo abaixo do dreno)".into(), 1.0 / 20.0, "un/m"));
+                q.push(("Conexões", format!("curvas 45° DN {dn} (ligação dreno–caixa)"), 1.0 / 20.0, "un/m"));
+            }
+        }
+        if !gd.dhp.is_empty() {
+            let n_dhp = gd.dhp.len() as f64 / dr.dhp_espacamento.max(0.5);
+            q.push(("Conexões", "DHP: luvas de emenda (barras de 6 m) e ponteira com tampão perfurado".into(), n_dhp * ((dr.dhp_comprimento / 6.0).ceil() - 1.0 + 1.0), "un/m"));
+        }
 
         crate::armadura::resumo_por_metro(r, &cx);
         if q.is_empty() {
             return;
         }
         r.titulo("Resumo dos demais materiais por metro de contenção");
-        r.linha(format!("{:<24} {:<52} {:>10} {:<6}", "Material", "Elemento", "Quant.", "Un."));
+        r.linha(format!("{:<24} {:<74} {:>10} {:<6}", "Material", "Elemento", "Quant.", "Un."));
         for (m, e, v, u) in &q {
-            r.linha(format!("{:<24} {:<52} {:>10} {:<6}", m, e.chars().take(52).collect::<String>(), fmt(*v), u));
+            r.linha(format!("{:<24} {:<74} {:>10} {:<6}", m, e.chars().take(74).collect::<String>(), fmt(*v), u));
         }
         let concreto: f64 = q.iter().filter(|x| x.0 == "Concreto").map(|x| x.2).sum();
         if concreto > 0.0 {
@@ -1267,6 +1287,50 @@ impl Projeto {
         }
         let z = (altura - hres).max(0.0);
         Some(na.map_or(z, |n| n.min(z)))
+    }
+}
+
+
+impl Projeto {
+    /// O reaterro frontal (solo à frente acima do topo da base) é necessário? Recalcula a
+    /// mesma estrutura com o terreno à frente rebaixado até o topo da base — dreno de pé no
+    /// pé, sem lâmina residual elevada — e informa se a estabilidade externa ainda atende.
+    fn verificar_reaterro_frontal(&self, r: &mut Resultado) {
+        use crate::resultado::fmt;
+        let base = match self.tipo {
+            TipoContencao::Gravidade => self.gravidade.f,
+            TipoContencao::Flexao if !(self.flexao.sistema == crate::tipos::misto::Sistema::Misto && self.flexao.misto.fundacao_estacas()) => self.flexao.h_sapata,
+            _ => return,
+        };
+        let df = self.geometria.engaste;
+        if df <= base + 0.05 {
+            return;
+        }
+        // mesma estrutura e mesmo topo: a altura livre cresce o que o terreno desce
+        let mut q = self.clone();
+        q.geometria.engaste = base;
+        q.geometria.h = self.geometria.h + (df - base);
+        let rq = q.calcular_local();
+        let estab = |v: &crate::resultado::Verificacao| v.nome.contains("(estático)") || v.nome.contains("(sísmico)");
+        let falhas: Vec<String> = rq.verificacoes.iter().filter(|v| estab(v) && !v.ok()).map(|v| v.nome.split(" — ").next().unwrap_or(&v.nome).to_string()).collect();
+        r.titulo("Necessidade do reaterro frontal");
+        r.linha(format!(
+            "Verificação: mesma estrutura com o terreno à frente rebaixado de {} m para {} m (topo da base), isto é, sem reaterro frontal e com o dreno de pé no pé do muro.",
+            fmt(df),
+            fmt(base)
+        ));
+        if falhas.is_empty() {
+            r.linha(format!(
+                "Resultado: sem o reaterro frontal a estabilidade externa continua atendendo — o reaterro de {} m NÃO é necessário à estabilidade. Ele pode ser dispensado (dreno de pé no pé, sem lâmina residual elevada), desde que a base fique protegida contra erosão e variação de umidade e respeitadas a profundidade mínima de assentamento da NBR 6122 e as condições de divisa (≥ 1,5 m).",
+                fmt(df - base)
+            ));
+            r.aviso("Reaterro frontal dispensável para a estabilidade (ver “Necessidade do reaterro frontal”): avaliar rebaixar o terreno à frente até o topo da base e manter o dreno de pé no pé.");
+        } else {
+            r.linha(format!(
+                "Resultado: sem o reaterro frontal deixam de atender: {} — o reaterro frontal É necessário (embutimento e passivo à frente) e deve ser executado compactado e mantido permanentemente.",
+                falhas.join(", ")
+            ));
+        }
     }
 }
 
