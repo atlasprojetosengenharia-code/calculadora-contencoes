@@ -349,3 +349,129 @@ pub fn estribo_minimo(bw_m: f64, d_m: f64, fck: f64, fyk: f64) -> (f64, f64) {
     }
     (8.0, 7.0)
 }
+
+// ---------------------------------------------------------------------------
+// Resumo de aço por metro de contenção (orçamento e execução)
+// ---------------------------------------------------------------------------
+
+/// Massa linear nominal do aço CA-50/60 (kg/m): 0,006165·Ø² (Ø em mm; NBR 7480).
+pub fn massa_linear(phi_mm: f64) -> f64 {
+    0.006165 * phi_mm * phi_mm
+}
+
+/// Contexto para converter a tabela de armação em metros de barra por metro de obra.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ContextoResumo {
+    /// Peças repetidas ao longo da contenção, por metro: pilares/blocos e estacas.
+    pub pilares_por_m: f64,
+    pub estacas_por_m: f64,
+    /// Grampos por metro de face (todas as linhas).
+    pub grampos_por_m: f64,
+    /// Extensão transversal das barras corridas (m): altura da parede e largura da sapata.
+    pub altura: f64,
+    pub largura_sapata: f64,
+}
+
+/// Metros de barra por metro de contenção para uma posição da tabela (barras corridas
+/// com +10 % de traspasses). Telas: retorna (0, kg/m) — massa direta pela área.
+fn metros_por_metro(a: &Armadura, cx: &ContextoResumo) -> (f64, f64) {
+    let n = a.quantidade.split(|c: char| !c.is_ascii_digit()).find(|t| !t.is_empty()).and_then(|t| t.parse::<f64>().ok()).unwrap_or(1.0);
+    let q = a.quantidade.as_str();
+    let faces = if q.contains("por face") || a.elemento.contains("cada face") { 2.0 } else { 1.0 };
+    if a.bitola_mm <= 0.0 {
+        // tela soldada: As (cm²/m) em cada direção ; 0,785 kg por cm² por metro
+        return (0.0, 2.0 * 0.785 * a.as_ef * cx.altura * 1.10);
+    }
+    if a.comprimento_m <= 0.0 {
+        // corrida ao longo da contenção
+        return match a.espac_cm {
+            Some(s) => {
+                let ext = if a.elemento.starts_with("Sapata") || a.elemento.starts_with("Ponta") { cx.largura_sapata } else { cx.altura };
+                ((ext / (s / 100.0)).floor() + 1.0) * faces * 1.10
+            }
+            None => n * 1.10,
+        }
+        .pipe_m();
+    }
+    let por_peca = |pecas_por_m: f64| n * a.comprimento_m * pecas_por_m;
+    let m = if q.contains("/m") {
+        n * faces * a.comprimento_m
+    } else if q.contains("espiras") {
+        // hélice: comprimento já é o total por estaca
+        a.comprimento_m * cx.estacas_por_m
+    } else if q.contains("por estaca") {
+        por_peca(cx.estacas_por_m)
+    } else if q.contains("por pilar") || q.contains("por bloco") {
+        por_peca(cx.pilares_por_m)
+    } else if q.contains("a cada") {
+        a.comprimento_m * cx.grampos_por_m
+    } else if q.contains("por face") {
+        // vigas do misto: uma barra por vão (comprimento ≈ vão + ancoragens), k vigas
+        let k = a.elemento.split(['(', ')']).nth(1).and_then(|x| x.trim().parse::<f64>().ok()).unwrap_or(1.0);
+        n * 2.0 * k * a.comprimento_m * cx.pilares_por_m
+    } else {
+        n * a.comprimento_m
+    };
+    (m, 0.0)
+}
+
+trait PipeM {
+    fn pipe_m(self) -> (f64, f64);
+}
+impl PipeM for f64 {
+    fn pipe_m(self) -> (f64, f64) {
+        (self, 0.0)
+    }
+}
+
+/// Acrescenta ao memorial o resumo de aço por metro de contenção, por posição e por
+/// diâmetro (m/m e kg/m), com o total. Massa nominal pela NBR 7480.
+pub fn resumo_por_metro(r: &mut crate::resultado::Resultado, cx: &ContextoResumo) {
+    use crate::resultado::Verificacao;
+    if r.armaduras.is_empty() {
+        return;
+    }
+    let mut por_phi: Vec<(f64, f64, f64)> = Vec::new(); // (Ø, m/m, kg/m)
+    let mut linhas = Vec::new();
+    for a in &r.armaduras {
+        let (m, kg_tela) = metros_por_metro(a, cx);
+        let kg = if a.bitola_mm > 0.0 { m * massa_linear(a.bitola_mm) } else { kg_tela };
+        if kg <= 0.0 {
+            continue;
+        }
+        linhas.push(format!(
+            "{:<5} {:<58} {:>8} {:>10} {:>9}",
+            a.pos,
+            a.elemento.chars().take(58).collect::<String>(),
+            if a.bitola_mm > 0.0 { format!("Ø{}", fmt_bitola(a.bitola_mm)) } else { "tela".into() },
+            if m > 0.0 { fmt(m) } else { "—".into() },
+            fmt(kg)
+        ));
+        match por_phi.iter_mut().find(|(p, ..)| (*p - a.bitola_mm).abs() < 1e-6) {
+            Some(e) => {
+                e.1 += m;
+                e.2 += kg;
+            }
+            None => por_phi.push((a.bitola_mm, m, kg)),
+        }
+    }
+    if por_phi.is_empty() {
+        return;
+    }
+    por_phi.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let total: f64 = por_phi.iter().map(|e| e.2).sum();
+    r.titulo("Resumo de aço por metro de contenção (CA-50)");
+    r.linha("Por posição (barras por metro de obra ; corridas com +10 % de traspasses ; massa nominal 0,006165·Ø² kg/m, NBR 7480):");
+    r.linha(format!("{:<5} {:<58} {:>8} {:>10} {:>9}", "Pos.", "Elemento", "Bitola", "m/m", "kg/m"));
+    for l in linhas {
+        r.linha(l);
+    }
+    r.linha("Por diâmetro:");
+    r.linha(format!("{:<10} {:>12} {:>12}", "Bitola", "m/m", "kg/m"));
+    for (phi, m, kg) in &por_phi {
+        r.linha(format!("{:<10} {:>12} {:>12}", if *phi > 0.0 { format!("Ø{} mm", fmt_bitola(*phi)) } else { "telas".into() }, if *m > 0.0 { fmt(*m) } else { "—".into() }, fmt(*kg)));
+    }
+    r.linha(format!("{:<10} {:>12} {:>12}", "TOTAL", "", fmt(total)));
+    r.linha("Acrescentar perdas de corte e dobra (usual 5 a 10 %) no orçamento.");
+    r.verif(Verificacao::info("Aço total por metro de contenção (CA-50)", total, "kg/m"));
+}

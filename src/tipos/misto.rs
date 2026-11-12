@@ -362,11 +362,12 @@ impl Misto {
             let acima = if i == 0 { h_painel } else { niveis[i - 1] };
             let abaixo = niveis.get(i + 1).copied().unwrap_or(0.0);
             let w = integrar(0.5 * (y + abaixo), 0.5 * (y + acima));
-            let md = gf * w * s * s / 8.0;
+            // viga contínua sobre os pilares: momento de apoio ≈ w·s²/10 (vãos iguais)
+            let md = gf * w * s * s / 10.0;
             let vd = gf * w * s / 2.0;
             // flexão horizontal: braço na largura perpendicular ao muro
             let fl = flexao_retangular(md, vh, vb, dv, c.fck, c.fyk, fat.gamma_c, fat.gamma_s);
-            let as_nec = fl.as_calc.max(0.0015 * vb * vh * 1e4);
+            let as_nec = fl.as_calc.max(crate::concreto::rho_min(c.fck) * vb * vh * 1e4);
             let (n, phi) = barras(as_nec, vh, cob);
             let vr = vrd1(vh, dv, n as f64 * area(phi), c.fck, fat.gamma_c);
             pior_xd = pior_xd.max(fl.x_d);
@@ -380,7 +381,7 @@ impl Misto {
         if !niveis.is_empty() {
             r.formula(
                 "Vigas intermediárias — flexão horizontal entre pilares (NBR 6118)",
-                "w = ∫ p dy na faixa de influência ;  Md = γf·w·s²/8 ;  Vd = γf·w·s/2 ;  seção h (vertical) × b (para o aterro)",
+                "w = ∫ p dy na faixa de influência ;  Md = γf·w·s²/10 (contínua) ;  Vd = γf·w·s/2 ;  seção h (vertical) × b (para o aterro)",
                 format!("viga {} × {} cm ;  s = {} m", fmt(100.0 * vh), fmt(100.0 * vb), fmt(s)),
                 linhas.join(" | "),
             );
@@ -394,13 +395,14 @@ impl Misto {
         let (bw, hp) = (self.pilar_b, self.pilar_h);
         let d = hp - cob - 0.0125;
         let fl = flexao_retangular(md, bw, hp, d, c.fck, c.fyk, fat.gamma_c, fat.gamma_s);
-        let as_min = 0.0015 * bw * hp * 1e4;
+        // NBR 6118 17.3.5.3.1: As,mín de pilar = máx(0,15·Nd/fyd ; 0,4 % Ac) — total, descontados os 2 Ø10 porta-estribos
+        let as_min = (0.004 * bw * hp * 1e4 - 2.0 * area(10.0)).max(crate::concreto::rho_min(c.fck) * bw * hp * 1e4);
         let as_nec = fl.as_calc.max(as_min);
         r.formula(
             "Pilar — flexão na base (reações das vigas na faixa entre eixos)",
             "Md = γf·M·s ;  y = d·(1 − √(1 − 2·Md/(0,85·fcd·b·d²))) ;  As = Md/(fyd·(d − y/2))",
             format!("Md = {}·{}·{} ;  b × h = {} × {} cm ;  d = {} cm", fmt(gf), fmt(m_k), fmt(s), fmt(100.0 * bw), fmt(100.0 * hp), fmt(100.0 * d)),
-            format!("Md = {} kN·m ;  x/d = {} ;  As = {} cm² (mín. 0,15 % = {} cm²)", fmt(md), fmt(fl.x_d), fmt(fl.as_calc), fmt(as_min)),
+            format!("Md = {} kN·m ;  x/d = {} ;  As = {} cm² (mín. de pilar 0,4 % Ac − 2 Ø10 = {} cm²)", fmt(md), fmt(fl.x_d), fmt(fl.as_calc), fmt(as_min)),
         );
         r.verif(Verificacao::max("Pilar: x/d (NBR 6118)", fl.x_d, 0.45, ""));
         let (n, phi) = barras(as_nec, bw, cob);
@@ -414,7 +416,8 @@ impl Misto {
         let fywd = (c.fyk / fat.gamma_s).min(435.0);
         let asw_s = ((vd - vc).max(0.0) / (0.9 * d * fywd * 1000.0) * 1e4).max(0.2 * 0.3 * c.fck.powf(2.0 / 3.0) / c.fyk * bw * 1e4);
         let phi_e = if asw_s > 4.0 { 8.0 } else { 6.3 };
-        let s_e = ((2.0 * area(phi_e) / asw_s * 100.0).floor()).clamp(5.0, (0.6 * d * 100.0).min(30.0));
+        // espaçamento: cortante e NBR 6118 18.4.3 (≤ 20 cm, ≤ menor dimensão, ≤ 12·Øl para CA-50)
+        let s_e = ((2.0 * area(phi_e) / asw_s * 100.0).floor()).min(20.0).min(100.0 * bw.min(hp)).min(1.2 * phi).min((0.6 * d * 100.0).min(30.0)).max(5.0).floor();
         r.formula(
             "Pilar — cortante (modelo I, NBR 6118 17.4.2.2)",
             "VRd2 = 0,27·αv2·fcd·bw·d ;  Vc = 0,6·fctd·bw·d ;  Asw/s = (Vd − Vc)/(0,9·d·fywd) ≥ ρw,mín·bw",
@@ -460,13 +463,14 @@ impl Misto {
         let db = hb - cob - 0.0125;
         let flv = flexao_retangular(md_v, bb, hb, db, c.fck, c.fyk, fat.gamma_c, fat.gamma_s);
         let w_h = p_base * hb;
-        let md_h = gf * w_h * s * s / 8.0;
+        // baldrame contínuo sobre os blocos: momento de apoio ≈ w·s²/10
+        let md_h = gf * w_h * s * s / 10.0;
         let flh = flexao_retangular(md_h, hb, bb, bb - cob - 0.0125, c.fck, c.fyk, fat.gamma_c, fat.gamma_s);
         let as_nec = flv.as_calc.max(flh.as_calc).max(0.0015 * bb * hb * 1e4);
         let (n, phi) = barras(as_nec, bb, cob);
         r.formula(
             "Viga baldrame — entre blocos (vão = espaçamento dos pilares)",
-            "vertical: q = γalv·t·Hp + peso próprio ;  Md = γf·q·s²/10 ;  horizontal: w = p·hb ;  Md = γf·w·s²/8",
+            "vertical: q = γalv·t·Hp + peso próprio ;  Md = γf·q·s²/10 ;  horizontal: w = p·hb ;  Md = γf·w·s²/10 (contínua sobre os blocos)",
             format!("q = {} kN/m ;  w = {} kN/m ;  seção {} × {} cm ;  s = {} m", fmt(q_v), fmt(w_h), fmt(100.0 * bb), fmt(100.0 * hb), fmt(s)),
             format!("Md,v = {} kN·m (x/d = {}) ;  Md,h = {} kN·m (x/d = {}) ;  {} Ø{} por face", fmt(md_v), fmt(flv.x_d), fmt(md_h), fmt(flh.x_d), n, crate::armadura::fmt_bitola(phi)),
         );
@@ -532,7 +536,10 @@ impl Misto {
             let np = (n_em(ponta - 1.0).0 + n_em(ponta).0 + n_em(ponta + 1.0).0) / 3.0;
             let (cp, alfa, _) = categoria(n_em(ponta).1);
             let qp = alfa * cp * np * ap;
-            let q_adm = (ql_b / 1.3 + qp / 4.0).min((ql_b + qp) / 2.0);
+            // NBR 6122 8.2.1.2: em estacas escavadas a ponta não pode passar de 20 % da carga admissível
+            let ql_adm = (ql_b / 1.3).min(ql_b / 2.0 + qp / 2.0);
+            let qp_adm = (qp / 4.0).min(0.25 * ql_adm);
+            let q_adm = (ql_adm + qp_adm).min((ql_b + qp) / 2.0);
             let qt_adm = ql_b / 2.0 + 0.9 * c.peso * ap * l;
             (q_adm, qt_adm, ql_b, qp)
         };
@@ -547,7 +554,7 @@ impl Misto {
         let (q_adm, qt_adm, ql, qp) = capacidade(l);
         r.formula(
             "Estacas escavadas — capacidade (Décourt-Quaresma, SPT ; NBR 6122)",
-            "Ql = Σ β·10·(N/3 + 1)·U·Δz ;  Qp = α·C·Np·Ap ;  Qadm = mín(Ql/1,3 + Qp/4 ; (Ql + Qp)/2) ;  tração: Ql/2 + 0,9·Pestaca",
+            "Ql = Σ β·10·(N/3 + 1)·U·Δz ;  Qp = α·C·Np·Ap ;  Qadm = mín(Ql/1,3 + Qp/4 ; (Ql + Qp)/2), ponta ≤ 20 % de Qadm (NBR 6122, escavada) ;  tração: Ql/2 + 0,9·Pestaca",
             format!("Ø = {} cm ;  topo a {} m de profundidade ;  L = {} m", fmt(100.0 * d), fmt(z0), fmt(l)),
             format!("Ql = {} kN ;  Qp = {} kN ;  Qadm = {} kN ;  Qt,adm = {} kN", fmt(ql), fmt(qp), fmt(q_adm), fmt(qt_adm)),
         );

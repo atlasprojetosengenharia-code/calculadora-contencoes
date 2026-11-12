@@ -427,7 +427,7 @@ impl MuroFlexao {
             Some(n1) => n1,
             None => {
                 let n1 = linha("N1", "Parede — vertical principal (face do aterro)", as_par, tb, true, h - hs - cob, true);
-                linha("N2", "Parede — horizontal de distribuição", as_dist_par, tb, false, 0.0, true);
+                linha("N2", "Parede — horizontal de distribuição (cada face)", as_dist_par, tb, false, 0.0, true);
                 linha("N3", "Parede — vertical construtiva (face externa)", as_dist_par, tb, false, h - 2.0 * cob, true);
                 n1
             }
@@ -443,13 +443,14 @@ impl MuroFlexao {
             as_tal,
             hs,
             true,
-            self.b_talao + tb + lb_sup - cob,
+            // lb em cm → m (comprimento de corte: talão + parede + ancoragem − cobrimento)
+            self.b_talao + tb + lb_sup / 100.0 - cob,
             false,
         );
         let as_pon = fpo.as_adotar();
         linha("N5", "Ponta / sapata — inferior principal", as_pon, hs, true, b - 2.0 * cob, true);
         let as_dist_sap = armadura::as_distribuicao(as_tal.max(as_pon), c.fck, hs);
-        linha("N6", "Sapata — distribuição (longitudinal)", as_dist_sap, hs, false, 0.0, true);
+        linha("N6", "Sapata — distribuição (longitudinal, cada face)", as_dist_sap, hs, false, 0.0, true);
         // Arranque: esperas com a mesma bitola/espaçamento de N1
         let comp_n7 = (hs - cob) + n1.lb_cm / 100.0 + l0t / 100.0;
         drop(linha);

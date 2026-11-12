@@ -784,6 +784,7 @@ impl Projeto {
             r.aviso("Camadas coesivas com c' e φ' padrão (condição drenada) — ajustar com base em ensaios (NBR 11682 Anexo D).");
         }
         r.aviso("Parâmetros obtidos por correlações com o SPT são estimativas; confirmar com ensaios de laboratório/campo.");
+        self.quantitativos(&mut r);
         cab.append(&mut r.blocos);
         r.blocos = cab;
         r.referencias = crate::referencias::gerar(&r);
@@ -971,6 +972,146 @@ impl Projeto {
         if !gd.bolsas.is_empty() || gd.envelope_pe.is_some() {
             dr.relatar_bolsas(r, gd.bolsas.len(), gd.envelope_pe.is_some());
         }
+    }
+}
+
+
+impl Projeto {
+    /// Quantitativos por metro de contenção: resumo de aço (por diâmetro) e demais
+    /// materiais (concreto por elemento, fôrmas, alvenaria, graute, estacas, tirantes,
+    /// grampos, perfis e drenagem). Valores teóricos, sem perdas.
+    fn quantitativos(&self, r: &mut Resultado) {
+        use crate::armadura::ContextoResumo;
+        use crate::resultado::{fmt, Verificacao};
+        let verif = |r: &Resultado, prefixo: &str| r.verificacoes.iter().find(|v| v.nome.starts_with(prefixo)).map(|v| v.valor);
+        let f0 = |x: f64| format!("{x:.0}");
+        // (material, elemento, quantidade, unidade)
+        let mut q: Vec<(&str, String, f64, &str)> = Vec::new();
+        let mut cx = ContextoResumo::default();
+        match self.tipo {
+            TipoContencao::Gravidade => {
+                let g = self.preparar_gravidade();
+                let gg = g.geo();
+                let corpo = crate::estabilidade::centroide(&g.poligono()).0;
+                let dente = if g.dente { g.dente_b * g.dente_h } else { 0.0 };
+                q.push(("Corpo do muro", g.material.nome().to_string(), corpo + dente, "m³/m"));
+                if matches!(g.material, crate::tipos::gravidade::Material::ConcretoCiclopico | crate::tipos::gravidade::Material::ConcretoSimples) {
+                    q.push(("Fôrmas", "faces do corpo e da base".into(), (gg.htot - g.f) * 2.0 + 2.0 * g.f, "m²/m"));
+                }
+                q.push(("Concreto magro", "lastro e = 5 cm".into(), 0.05 * gg.base, "m³/m"));
+            }
+            TipoContencao::Flexao => {
+                let m = self.preparar_flexao();
+                let (bp, tb, tt, hs, h) = (m.b_ponta, m.t_base, m.t_topo, m.h_sapata, m.h);
+                let b = bp + tb + m.b_talao;
+                let hst = h - hs;
+                cx.altura = hst;
+                cx.largura_sapata = b;
+                if m.sistema == crate::tipos::misto::Sistema::Misto {
+                    let mi = &m.misto;
+                    let s = mi.espac_pilar.max(0.5);
+                    let n_vigas = self.niveis_vigas_misto().len() as f64;
+                    let hr = crate::tipos::misto::H_RESPALDO;
+                    cx.pilares_por_m = 1.0 / s;
+                    let fck = m.concreto.fck;
+                    q.push(("Concreto", format!("pilares {}×{} cm (C{})", f0(100.0 * mi.pilar_b), f0(100.0 * mi.pilar_h), f0(fck)), mi.pilar_b * mi.pilar_h * hst / s, "m³/m"));
+                    q.push(("Concreto", format!("{} viga(s) intermediária(s) + respaldo", n_vigas), mi.viga_b * mi.viga_h * n_vigas + mi.bloco * hr, "m³/m"));
+                    let area_alv = (hst - hr - n_vigas * mi.viga_h).max(0.0) * (1.0 - mi.pilar_b / s);
+                    q.push(("Alvenaria estrutural", format!("bloco de concreto {} cm, fbk {} MPa", f0(100.0 * mi.bloco), f0(mi.fbk)), area_alv, "m²/m"));
+                    q.push(("Blocos", "39 × 19 cm (12,5 blocos/m²)".into(), 12.5 * area_alv, "un/m"));
+                    // graute nos furos armados: furo ≈ 0,13 × (t − 0,05) m a cada espaçamento das barras do painel
+                    let s_v = r.armaduras.iter().find(|a| a.pos == "N2").and_then(|a| a.espac_cm).unwrap_or(40.0) / 100.0;
+                    q.push(("Graute", "furos armados do painel (fgk ≥ 2·fbk)".into(), area_alv / 1.0 * 0.13 * (mi.bloco - 0.05) / s_v, "m³/m"));
+                    q.push(("Fôrmas", "pilares (3 faces), vigas (2 faces)".into(), (2.0 * (mi.pilar_h - mi.bloco) + mi.pilar_b) * hst / s + 2.0 * mi.viga_h * n_vigas, "m²/m"));
+                    if mi.fundacao_estacas() {
+                        let (_, lb, bb, hb) = mi.geometria_bloco();
+                        let l = verif(r, "Estaca: comprimento").unwrap_or(0.0);
+                        let ap = std::f64::consts::PI * mi.diam_estaca * mi.diam_estaca / 4.0;
+                        cx.estacas_por_m = 2.0 / s;
+                        q.push(("Concreto", "viga baldrame".into(), mi.baldrame_b * mi.baldrame_h, "m³/m"));
+                        q.push(("Concreto", format!("blocos {}×{}×{} m", fmt(lb), fmt(bb), fmt(hb)), lb * bb * hb / s, "m³/m"));
+                        q.push(("Estacas escavadas", format!("Ø{} cm, L = {} m (2 por bloco)", f0(100.0 * mi.diam_estaca), fmt(l)), 2.0 * l / s, "m/m"));
+                        q.push(("Concreto", "estacas".into(), 2.0 * ap * l / s, "m³/m"));
+                        q.push(("Fôrmas", "baldrame (2 faces) e blocos".into(), 2.0 * mi.baldrame_h + 2.0 * (lb + bb) * hb / s, "m²/m"));
+                    } else {
+                        q.push(("Concreto", "sapata corrida".into(), b * hs, "m³/m"));
+                        q.push(("Fôrmas", "laterais da sapata".into(), 2.0 * hs, "m²/m"));
+                    }
+                } else {
+                    let dente = if m.dente { m.dente_b * m.dente_h } else { 0.0 };
+                    q.push(("Concreto", format!("parede (C{})", f0(m.concreto.fck)), 0.5 * (tt + tb) * hst, "m³/m"));
+                    q.push(("Concreto", "sapata + dente".into(), b * hs + dente, "m³/m"));
+                    q.push(("Fôrmas", "parede (2 faces) e sapata".into(), 2.0 * hst + 2.0 * hs, "m²/m"));
+                }
+                q.push(("Concreto magro", "lastro e = 5 cm".into(), 0.05 * b, "m³/m"));
+            }
+            TipoContencao::Atirantada => {
+                let c = self.preparar_atirantada();
+                cx.altura = c.h + c.ficha;
+                let l_tir: f64 = r.reforcos.iter().map(|f| f.comprimento).sum();
+                q.push(("Concreto", format!("cortina e = {} m", fmt(c.espessura)), c.espessura * (c.h + c.ficha), "m³/m"));
+                q.push(("Fôrmas", "face externa da cortina".into(), c.h, "m²/m"));
+                q.push(("Tirantes", format!("{} nível(is) a cada {} m", r.reforcos.len(), fmt(c.espac_h)), l_tir / c.espac_h.max(0.1), "m/m"));
+            }
+            TipoContencao::Estacas => {
+                let e = self.preparar_estacas();
+                let lt = verif(r, "Comprimento total").unwrap_or(0.0);
+                cx.estacas_por_m = 1.0 / e.espacamento.max(0.2);
+                cx.altura = lt;
+                q.push(("Estacas", format!("Ø{} cm a cada {} m, L = {} m", f0(100.0 * e.diametro), fmt(e.espacamento), fmt(lt)), lt / e.espacamento.max(0.2), "m/m"));
+                q.push(("Concreto", "estacas".into(), std::f64::consts::PI * e.diametro * e.diametro / 4.0 * lt / e.espacamento.max(0.2), "m³/m"));
+            }
+            TipoContencao::Prancha => {
+                let e = self.preparar_prancha();
+                let lt = verif(r, "Comprimento total").unwrap_or(0.0);
+                q.push(("Estaca-prancha", format!("{} , L = {} m", e.nome_perfil, fmt(lt)), e.peso_parede() * lt, "kg/m"));
+            }
+            TipoContencao::Grampeado => {
+                let g = self.preparar_grampeado();
+                let n_lin = ((g.h - g.z1) / g.sv.max(0.3)).floor().max(0.0) + 1.0;
+                let face = g.h / g.incl_face.to_radians().cos();
+                cx.grampos_por_m = n_lin / g.sh.max(0.3);
+                cx.altura = face;
+                q.push(("Grampos", format!("{} linhas a cada {} m, L = {} m", n_lin, fmt(g.sh), fmt(g.comprimento)), n_lin * g.comprimento / g.sh.max(0.3), "m/m"));
+                q.push(("Calda de cimento", format!("furos Ø{} cm", f0(100.0 * g.diam_furo)), n_lin * g.comprimento / g.sh.max(0.3) * std::f64::consts::PI * g.diam_furo * g.diam_furo / 4.0, "m³/m"));
+                q.push(("Concreto projetado", format!("face e = {} m", fmt(g.espessura_face)), g.espessura_face * face, "m³/m"));
+            }
+        }
+        // drenagem
+        let gd = self.geo_drenagem();
+        let dr = &self.drenagem;
+        if !gd.barbacas.is_empty() {
+            q.push(("Tubo PVC", format!("barbacãs Ø{} mm", f0(dr.diam_barbaca_mm)), gd.larguras.iter().sum::<f64>() / dr.esp_h.max(0.3), "m/m"));
+        }
+        if dr.dreno_pe && gd.filtro.is_some() {
+            q.push(("Tubo PVC perfurado", format!("dreno de pé Ø{} mm", f0(dr.diam_dreno_pe_mm)), 1.0, "m/m"));
+        }
+        if !gd.canaletas.is_empty() {
+            q.push(("Canaleta de concreto", "meia-cana / U (crista e pé)".into(), gd.canaletas.len() as f64, "m/m"));
+        }
+        if !gd.dhp.is_empty() {
+            q.push(("DHP", format!("tubos de {} m", fmt(dr.dhp_comprimento)), gd.dhp.len() as f64 * dr.dhp_comprimento / dr.dhp_espacamento.max(0.5), "m/m"));
+        }
+
+        crate::armadura::resumo_por_metro(r, &cx);
+        if q.is_empty() {
+            return;
+        }
+        r.titulo("Resumo dos demais materiais por metro de contenção");
+        r.linha(format!("{:<24} {:<52} {:>10} {:<6}", "Material", "Elemento", "Quant.", "Un."));
+        for (m, e, v, u) in &q {
+            r.linha(format!("{:<24} {:<52} {:>10} {:<6}", m, e.chars().take(52).collect::<String>(), fmt(*v), u));
+        }
+        let concreto: f64 = q.iter().filter(|x| x.0 == "Concreto").map(|x| x.2).sum();
+        if concreto > 0.0 {
+            r.linha(format!("Concreto estrutural total: {} m³/m.", fmt(concreto)));
+            r.verif(Verificacao::info("Concreto estrutural por metro de contenção", concreto, "m³/m"));
+            let aco = verif(r, "Aço total por metro").unwrap_or(0.0);
+            if aco > 0.0 {
+                r.verif(Verificacao::info("Taxa de aço (aço / concreto estrutural)", aco / concreto, "kg/m³"));
+            }
+        }
+        r.linha("Valores teóricos (sem perdas). Brita, geotêxtil e areia da drenagem: ver a seção “Drenagem”.");
     }
 }
 
@@ -1488,6 +1629,34 @@ mod testes_drenagem_geo {
             p.drenagem.material_filtro = MaterialFiltro::AreiaGrossa;
             let gd = p.geo_drenagem();
             assert!(gd.filtro_continuo && gd.bolsas.is_empty(), "{}", tipo.nome());
+        }
+    }
+}
+
+#[cfg(test)]
+mod testes_resumos {
+    use super::*;
+
+    #[test]
+    fn resumos_de_aco_e_materiais_coerentes() {
+        for tipo in TIPOS_CONTENCAO {
+            let mut p = Projeto::default();
+            p.tipo = tipo;
+            p.geometria.h = 3.0;
+            p.pre_dimensionar();
+            let r = p.calcular();
+            let tem = |t: &str| r.blocos.iter().any(|b| matches!(b, crate::resultado::Bloco::Titulo(x) if x.starts_with(t)));
+            assert!(tem("Resumo dos demais materiais"), "{}", tipo.nome());
+            if !r.armaduras.is_empty() {
+                assert!(tem("Resumo de aço"), "{}", tipo.nome());
+                let kg = r.verificacoes.iter().find(|v| v.nome.starts_with("Aço total")).unwrap().valor;
+                assert!(kg > 0.0 && kg < 600.0, "{}: {kg} kg/m", tipo.nome());
+            }
+            // nenhum comprimento de corte maior que a maior dimensão plausível da peça
+            let limite = 3.0 * (p.altura_contida() + 10.0);
+            for a in &r.armaduras {
+                assert!(a.comprimento_m < limite, "{}: {} com {} m", tipo.nome(), a.pos, a.comprimento_m);
+            }
         }
     }
 }
